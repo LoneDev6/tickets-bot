@@ -3,22 +3,36 @@ const express = require('express');
 const app = express();
 const port = 669;
 app.get('/', (req, res) => res.send('Very nice'));
-app.listen(port, () => console.log(`Example app listening at http://localhost:${port}`));
+app.listen(port, () => console.log(`Listening at http://localhost:${port}`));
 //</editor-fold>
 
-const Discord = require('discord.js');
-const { MessageActionRow, MessageButton, MessageEmbed, ThreadAutoArchiveDuration, ChannelType } = require('discord.js');
+const discord = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ThreadAutoArchiveDuration, ChannelType } = require('discord.js');
 const { settings, config } = require('./global.js');
 
-const client = new Discord.Client({
+const client = new discord.Client({
+    closeTimeout: 3_000 ,
+    waitGuildTimeout: 15_000,
     intents: [
-        Discord.GatewayIntentBits.Guilds,
-        Discord.GatewayIntentBits.GuildMembers,
-        Discord.GatewayIntentBits.GuildBans,
-        Discord.GatewayIntentBits.GuildPresences,
-        Discord.GatewayIntentBits.GuildMessages,
-        Discord.GatewayIntentBits.MessageContent
-    ]
+        discord.GatewayIntentBits.Guilds,
+        discord.GatewayIntentBits.GuildMembers,
+        discord.GatewayIntentBits.GuildBans,
+        discord.GatewayIntentBits.GuildPresences,
+        discord.GatewayIntentBits.GuildMessages,
+        discord.GatewayIntentBits.MessageContent
+    ],
+    allowedMentions: {
+        parse: ["users"],
+        repliedUser: true
+    },
+    makeCache: discord.Options.cacheWithLimits({
+		...discord.Options.DefaultMakeCacheSettings,
+		ReactionManager: 0,
+        GuildMemberManager: {
+			maxSize: 20000,
+			keepOverLimit: member => member.id === client.user.id,
+		}
+	}),
 });
 
 client.on('disconnect', () => {
@@ -27,48 +41,37 @@ client.on('disconnect', () => {
 
 client.on('ready', () => {
     console.log(`Logged in as ${client.user.tag}!`);
-
-    client.user.setPresence({
-        status: "online",
-        activity: {
-            name: "threads",
-            type: 'WATCHING',
-            url: "https://www.discord.com"
-        }
-    });
-
 });
 
 
-client.on('messageCreate', async msg => {
-    if (msg.author.bot)
+client.on('messageCreate', async message => {
+    if (message.author.bot)
         return
 
-    if (msg.channel.type === "dm")
+    if (message.channel.type === "dm")
         return
 
-    // Create the panel with a button to create a thread in this channel.
-    // Use embeds to make it look nice.
-    if (msg.content === "aaacreateThreadPanel") { 
-        const row = new MessageActionRow()
-            .addComponents(
-                new MessageButton()
-                    .setCustomId('create_thread')
-                    .setLabel('Create Thread')
-                    .setStyle('PRIMARY') // You can also use ButtonStyle.Primary in v14
-                    .setEmoji('📝') // Add an emoji to make the button more engaging
-            );
+    if (message.author.id === '289137568144949248' && message.content === "aaacreateThreadPanel") { 
+        const button = new ButtonBuilder()
+            .setCustomId('create_thread')
+            .setLabel('Create Private Ticket')
+            .setStyle(ButtonStyle.Success)
+            .setEmoji('📝');
 
-        // Create the embed for a nicer presentation
-        const embed = new MessageEmbed()
-            .setColor('#0099FF') // Use a bright, appealing color
-            .setTitle('Thread Creation')
-            .setDescription('Click the button below to create a new thread in this channel.')
-            .setFooter('Powered by your awesome bot'); // Add a footer to make it look more polished
+        const row = new ActionRowBuilder().addComponents(button);
 
         // Send the embed along with the button
-        await msg.channel.send({
-            embeds: [embed],
+        await message.channel.send({
+            embeds: [
+                new EmbedBuilder()
+                .setColor('#0099FF')
+                .setTitle('Private Ticket')
+                .setDescription('Click the button below to create a new private ticket.'),
+            new EmbedBuilder()
+                .setTitle("Warning")
+                .setColor('#FFA500')
+                .setDescription('Please make sure to read the various tutorials and search on the Discord server or Github before creating a ticket.\nDo not abuse the ticket system.')
+            ],
             components: [row]
         });
     }
@@ -78,23 +81,51 @@ client.on('interactionCreate', async (interaction) => {
     if(!interaction.isButton())
         return
 
-    // TODO: fix
     if (interaction.customId === 'create_thread') {
-        // Create a thread in the channel where the button was clicked
+
+        // Iterate through threads and check if the user already has max 2 opened thread in the recent 48 hours.
+        let threadCount = 0;
+        await interaction.channel.threads.cache.forEach(thread => {
+            if (thread.name.includes(interaction.user.id) && thread.createdTimestamp + 172800000 >= Date.now())
+                threadCount++;
+        });
+
+        if (threadCount >= 2) {
+            return await interaction.reply({
+                content: 'You have reached the maximum amount of open threads. Please wait for a staff member to assist you.',
+                ephemeral: true
+            });
+        }
+
         const thread = await interaction.channel.threads.create({
-            name: "Private Thread",
-            autoArchiveDuration: ThreadAutoArchiveDuration.OneHour,
-            reason: 'Verification thread',
+            name: `Support Ticket - ${interaction.user.username} (${interaction.user.id})`,
+            autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+            reason: 'Private Ticket',
             type: ChannelType.PrivateThread,
         });
 
-        for (const memberId of config.members_auto_add) {
-            await thread.members.add(memberId);
-        }
+        await thread.members.add(interaction.user.id);
 
-        await thread.send('Welcome to your new thread!');
+        await thread.send({
+            embeds: [new EmbedBuilder()
+                .setColor('#0099FF')
+                .setTitle('Support Ticket')
+                .setDescription(`Hello <@${interaction.user.id}>, please wait for a staff member to assist you.\nIn the meantime make sure to read the various tutorials and search on the Discord server or Github.`)]
+        });
 
-        return await interaction.reply('Thread created successfully!');
+        await interaction.reply({
+            embeds: [new EmbedBuilder()
+                .setColor('#0099FF')
+                .setTitle('Ticket Created')
+                .setDescription('A new ticket has been created. Click the button below to access it.')
+            ],
+            components: [ new ActionRowBuilder().addComponents(new ButtonBuilder()
+                .setLabel('Go to Ticket')
+                .setStyle(ButtonStyle.Link)
+                .setURL(thread.url))
+            ],
+            ephemeral: true
+        });
     }
 });
 
