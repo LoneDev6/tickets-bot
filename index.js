@@ -106,6 +106,17 @@ client.on('interactionCreate', async (interaction) => {
 
         await thread.members.add(interaction.user.id);
 
+        // Staff role
+        const roleId = '784529945049038899';
+        const role = guild.roles.cache.get(roleId);
+        if (!role) {
+            console.error(`Ruolo con ID ${roleId} non trovato.`);
+            return;
+        }
+        role.members.forEach(member => {
+            thread.members.add(member.id).catch(console.error);
+        });
+
         await thread.send({
             embeds: [new EmbedBuilder()
                 .setColor('#0099FF')
