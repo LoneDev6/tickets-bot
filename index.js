@@ -84,65 +84,11 @@ Do not abuse the ticket system.`)
     }
 });
 
-async function disableAllButtonsWithId(interaction, buttonId, disabled) {
-    // const messages = await interaction.channel.messages.fetch({ limit: 50 })
-    // const messageWithButtons = messages.find(msg => // 50 should be enough.
-    //     msg.components.length > 0 && 
-    //     msg.author.id === client.user.id // Ensure it's sent by the bot.
-    //     && msg.components.some(row => row.components.some(component => component.customId === buttonId))
-    // );
-    // if (messageWithButtons) {
-    //     let count = 0;
-    //     const disabledComponents = messageWithButtons.components.map(row => {
-    //         return new ActionRowBuilder().addComponents(
-    //             row.components.map(component => {
-    //                 const builder = ButtonBuilder.from(component);
-    //                 if (component.customId === buttonId) {
-    //                     count++;
-    //                     if(count > 1) {
-    //                         return undefined;
-    //                     }
-    //                 }
-    //                 return builder;
-    //             })
-    //         );
-    //     });
-    //     await messageWithButtons.edit({ components: disabledComponents });
-    // }
-
-    // Iterate all messages and delete the buttons from the old ones and keep them only in the recent one.
-    // Fetch the last 50 messages in the channel
-    const messages = await interaction.channel.messages.fetch({ limit: 50 });
-
-    // Filter out messages with buttons and sent by the bot
-    const messagesWithButtons = messages.filter(msg =>
-        msg.components.length > 0 &&
-        msg.author.id === interaction.client.user.id &&
-        msg.components.some(row => row.components.some(component => component.customId === buttonId))
-    );
-
-    // Sort the messages by timestamp to find the most recent one
-    const sortedMessages = [...messagesWithButtons.values()].sort((a, b) => b.createdTimestamp - a.createdTimestamp);
-
-    // If there are messages with buttons
-    if (sortedMessages.length > 0) {
-        // Iterate over older messages and delete the buttons
-        for (let i = 1; i < sortedMessages.length; i++) {
-            const oldMessage = sortedMessages[i];
-            // Edit the message to disable the buttons
-            await oldMessage.edit({ components: [] });
-        }
-    }
-}
-
 client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isModalSubmit()) {
         if(interaction.customId === 'modal_ticket_panel_close_thread') {
             const reason = interaction.fields.getTextInputValue('reason');
-
-            //await disableAllButtonsWithId(interaction, 'ticket_panel_close_thread', true);
-            //await disableAllButtonsWithId(interaction, 'ticket_panel_reopen_thread', false);
 
             // Remove all buttons from the message
             await interaction.message.edit({ components: [] });
@@ -307,9 +253,6 @@ client.on('interactionCreate', async (interaction) => {
                     ephemeral: true
                 });
             }
-
-            //await disableAllButtonsWithId(interaction, 'ticket_panel_close_thread', false);
-            //await disableAllButtonsWithId(interaction, 'ticket_panel_reopen_thread', true);
 
             // Remove all buttons from the message
             await interaction.message.edit({ components: [] });
