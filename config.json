@@ -1,5 +1,8 @@
 {
-  "members_auto_add": [
-    "159985870458322944"
-  ]
+  "channels": {
+    "ticketsNotifications": "1290345180418932762"
+  },
+  "roles": {
+    "support_team": "784529945049038899"
+  }
 }
