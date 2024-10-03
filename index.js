@@ -1,3 +1,4 @@
+require('dotenv').config()
 require('./server.js');
 const discord = require('discord.js');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ThreadAutoArchiveDuration, ChannelType,TextInputStyle, ModalBuilder,TextInputBuilder } = require('discord.js');
