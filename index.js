@@ -88,13 +88,10 @@ async function checkIfHasExceededNumberOfThreads(interaction) {
 
     if (threadCount >= 1) {
         client.logger.info(`User @${interaction.user.tag} (${interaction.user.id}) tried to create a new ticket but has reached the maximum amount of open threads.`);
-        return await interaction.reply({
-            content: 'You have reached the maximum amount of open threads. Please wait for a staff member to assist you.',
-            ephemeral: true
-        });
+        return true;
     }
 
-    return interaction.deferUpdate();
+    return false;
 }
 
 client.on('interactionCreate', async (interaction) => {
@@ -129,11 +126,13 @@ client.on('interactionCreate', async (interaction) => {
 
         if(interaction.customId.startsWith('modal_ticket_panel_create_thread_')) {
 
-            const hasExceededThreads = await checkIfHasExceededNumberOfThreads(interaction);
-            if(hasExceededThreads) {
-                return hasExceededThreads;
+            if(await checkIfHasExceededNumberOfThreads(interaction)) {
+                return await interaction.reply({
+                    content: 'You have reached the maximum amount of open threads. Please wait for a staff member to assist you.',
+                    ephemeral: true
+                });
             }
-            
+
             const type = interaction.customId === 'modal_ticket_panel_create_thread_generic' ? 'Generic' : 'Payment';
             const description = interaction.fields.getTextInputValue('description');
             
@@ -300,9 +299,11 @@ client.on('interactionCreate', async (interaction) => {
 
         if (interaction.customId.startsWith('ticket_panel_create_thread_')) {
 
-            const hasExceededThreads = await checkIfHasExceededNumberOfThreads(interaction);
-            if(hasExceededThreads) {
-                return hasExceededThreads;
+            if(await checkIfHasExceededNumberOfThreads(interaction)) {
+                return await interaction.reply({
+                    content: 'You have reached the maximum amount of open threads. Please wait for a staff member to assist you.',
+                    ephemeral: true
+                });
             }
         
             const modal = new ModalBuilder()
