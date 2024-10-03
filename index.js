@@ -1,11 +1,4 @@
-//<editor-fold desc="Uptime">
-const express = require('express');
-const app = express();
-const port = 669;
-app.get('/', (req, res) => res.send('Very nice'));
-app.listen(port, () => console.log(`Listening at http://localhost:${port}`));
-//</editor-fold>
-
+require('./server.js');
 const discord = require('discord.js');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ThreadAutoArchiveDuration, ChannelType,TextInputStyle, ModalBuilder,TextInputBuilder } = require('discord.js');
 const { settings, config } = require('./global.js');
