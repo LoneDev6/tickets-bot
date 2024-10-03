@@ -103,6 +103,8 @@ client.on('interactionCreate', async (interaction) => {
         
             await interaction.channel.setArchived(true, reason ? reason : 'No reason.');
 
+            client.logger.info(`Ticket closed by @${interaction.member.user.tag} (${interaction.member.id}) in #${interaction.channel.name} (${interaction.channel.id}).`);
+
             return await interaction.deferUpdate();
         }
 
@@ -116,6 +118,8 @@ client.on('interactionCreate', async (interaction) => {
                 reason: 'Private Ticket',
                 type: ChannelType.PrivateThread
             });
+
+            client.logger.info(`Ticket created by @${interaction.user.tag} (${interaction.user.id}) in #${interaction.channel.name} (${interaction.channel.id}).`);
     
             // Set messages timeout for this thread
             await thread.setRateLimitPerUser(5, `Ticket: ${interaction.user.username} (${interaction.user.id})`);
@@ -253,6 +257,8 @@ client.on('interactionCreate', async (interaction) => {
 
             await interaction.channel.setArchived(false);
 
+            client.logger.info(`Ticket re-opened by @${interaction.member.user.tag} (${interaction.member.id}) in #${interaction.channel.name} (${interaction.channel.id}).`);
+
             return await interaction.reply({
                 embeds: [new EmbedBuilder()
                     .setColor('#0099FF')
@@ -276,6 +282,7 @@ client.on('interactionCreate', async (interaction) => {
             });
 
             if (threadCount >= 1) {
+                client.logger.info(`User @${interaction.user.tag} (${interaction.user.id}) tried to create a new ticket but has reached the maximum amount of open threads.`);
                 return await interaction.reply({
                     content: 'You have reached the maximum amount of open threads. Please wait for a staff member to assist you.',
                     ephemeral: true
