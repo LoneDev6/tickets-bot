@@ -262,7 +262,7 @@ client.on('interactionCreate', async (interaction) => {
             return await interaction.reply({
                 embeds: [new EmbedBuilder()
                     .setColor('#0099FF')
-                    .setTitle('Ticket Closed')
+                    .setTitle('Ticket Re-opened')
                     .setDescription(`This ticket has been re-opened by <@${interaction.member.id}>.`)
                 ],
                 components: [ new ActionRowBuilder().addComponents(new ButtonBuilder()
