@@ -78,6 +78,25 @@ Do not abuse the ticket system.`)
     }
 });
 
+async function checkIfHasExceededNumberOfThreads(interaction) {
+    // Iterate through threads and check if the user already has max 1 opened thread in the recent 48 hours.
+    let threadCount = 0;
+    await interaction.channel.threads.cache.forEach(thread => {
+        if (thread.archived === false && thread.name.includes(interaction.user.id) && thread.createdTimestamp + 172800000 >= Date.now())
+            threadCount++;
+    });
+
+    if (threadCount >= 1) {
+        client.logger.info(`User @${interaction.user.tag} (${interaction.user.id}) tried to create a new ticket but has reached the maximum amount of open threads.`);
+        return await interaction.reply({
+            content: 'You have reached the maximum amount of open threads. Please wait for a staff member to assist you.',
+            ephemeral: true
+        });
+    }
+
+    return interaction.deferUpdate();
+}
+
 client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isModalSubmit()) {
@@ -109,6 +128,12 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if(interaction.customId.startsWith('modal_ticket_panel_create_thread_')) {
+
+            const hasExceededThreads = await checkIfHasExceededNumberOfThreads(interaction);
+            if(hasExceededThreads) {
+                return hasExceededThreads;
+            }
+            
             const type = interaction.customId === 'modal_ticket_panel_create_thread_generic' ? 'Generic' : 'Payment';
             const description = interaction.fields.getTextInputValue('description');
             
@@ -274,21 +299,12 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.customId.startsWith('ticket_panel_create_thread_')) {
-            // Iterate through threads and check if the user already has max 1 opened thread in the recent 48 hours.
-            let threadCount = 0;
-            await interaction.channel.threads.cache.forEach(thread => {
-                if (thread.archived === false && thread.name.includes(interaction.user.id) && thread.createdTimestamp + 172800000 >= Date.now())
-                    threadCount++;
-            });
 
-            if (threadCount >= 1) {
-                client.logger.info(`User @${interaction.user.tag} (${interaction.user.id}) tried to create a new ticket but has reached the maximum amount of open threads.`);
-                return await interaction.reply({
-                    content: 'You have reached the maximum amount of open threads. Please wait for a staff member to assist you.',
-                    ephemeral: true
-                });
+            const hasExceededThreads = await checkIfHasExceededNumberOfThreads(interaction);
+            if(hasExceededThreads) {
+                return hasExceededThreads;
             }
-
+        
             const modal = new ModalBuilder()
                 .setCustomId(`modal_${interaction.customId}`)
                 .setTitle('Create a Ticket');
