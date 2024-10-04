@@ -174,8 +174,12 @@ client.on('interactionCreate', async (interaction) => {
                 components: [ new ActionRowBuilder().addComponents(new ButtonBuilder()
                     .setLabel('Go to Ticket')
                     .setStyle(ButtonStyle.Link)
-                    .setURL(thread.url))
-                ],
+                    .setURL(thread.url),
+                    new ButtonBuilder()
+                    .setCustomId('ticket_panel_join_thread_' + thread.id)
+                    .setLabel('Join Ticket')
+                    .setStyle(ButtonStyle.Primary)
+                )],
             });
     
             // Send a message to the user in the thread
@@ -320,8 +324,54 @@ client.on('interactionCreate', async (interaction) => {
 
             return await interaction.showModal(modal);
         }
+
+        if(interaction.customId.startsWith("ticket_panel_join_thread_")) {
+            const threadId = interaction.customId.split('ticket_panel_join_thread_')[1];
+            const thread = interaction.guild.channels.cache.get(threadId);
+            if(!thread) {
+                return await interaction.reply({
+                    content: 'The ticket thread does not exist.',
+                    ephemeral: true
+                });
+            }
+
+            if(thread.archived) {
+                return await interaction.reply({
+                    content: 'The ticket thread is closed.',
+                    ephemeral: true
+                });
+            }
+
+            await thread.members.add(interaction.user.id);
+
+            // Update the thread notification message to include the new user in the list of users who already joined the thread.
+            // Add a new embed to list the current users if not available or edit it by attaching that new embed to the ones.
+            // NOTE: also add interaction.user.id to the list of users.
+            // Force thread members to be fetched to avoid caching issues.
+            await thread.members.fetch();
+            const mentions = thread.members.cache
+                .map(member => member.id !== client.user.id ? `<@${member.id}>` : "")
+                .filter(mention => mention !== "");
+            const description = mentions.join(', ');
+            const embeds = interaction.message.embeds;
+            if(embeds.length === 1) {
+                embeds.push(new EmbedBuilder()
+                    .setTitle('Staff In Ticket')
+                    .setDescription(description)
+                );
+            } else {
+                embeds[1] = new EmbedBuilder()
+                    .setTitle('Staff In Ticket')
+                    .setDescription(description);
+            }
+            await interaction.message.edit({ embeds: embeds });
+
+            return await interaction.reply({
+                content: 'You have successfully joined the ticket thread.',
+                ephemeral: true
+            });
+        }
     }
-    
 });
 
 
