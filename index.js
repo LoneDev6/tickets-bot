@@ -37,6 +37,7 @@ client.on('disconnect', () => {
 
 client.on('ready', () => {
     console.log(`Logged in as ${client.user.tag}!`);
+    onReady();
 });
 
 client.on('messageCreate', async message => {
@@ -374,7 +375,6 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
-
 client.on('error', error => client.logger.error("Error", error));
 client.on('warn', info => client.logger.warn(info, info));
 process.on('unhandledRejection', error => client.logger.error("UNHANDLED_REJECTION\n" + error, error));
@@ -383,6 +383,92 @@ process.on('uncaughtException', error => {
     process.exit(1);
 });
 
-
-
 client.login(settings.DISCORD_TOKEN);
+
+function onReady() {
+    // Schedule a task that each 5 minutes will iterate through all the messages in the tickets notification channel and edits the embed color to gray if the ticket is closed, and rename
+    // the button to "Re-open" if the ticket is closed. Also rename the title to "Ticket Closed" if the ticket is closed.
+    // This is useful to keep the notification channel clean and to avoid pinging everyone for no reason.
+    async function updateTicketsNotificationChannel() {
+        const notificationChannel = client.channels.cache.get(config.channels.ticketsNotifications);
+        if(!notificationChannel)
+        {
+            client.logger.error(`Failed to iterate through the tickets notification channel. The channel ${notificationChannel} does not exist.`);
+            return;
+        }
+
+        console.log('Checking tickets...');
+        fetchAndProcessMessages(notificationChannel, 100);
+    }
+    setInterval(updateTicketsNotificationChannel, 300_000);
+    updateTicketsNotificationChannel();
+}
+
+async function fetchAndProcessMessages(channel, limit = 100) {
+    let lastMessageId = null;
+
+    while (true) {
+        // Fetch the messages in batches
+        const options = { limit };
+        if (lastMessageId) {
+            options.before = lastMessageId;
+        }
+
+        const messages = await channel.messages.fetch(options);
+        if (messages.size === 0) {
+            break; // No more messages to process
+        }
+
+        console.log('Fetched messages from ticketsNotifications channel.');
+
+        // Iterate over each message
+        for (const message of messages.values()) {
+            if (message.embeds.length === 0) {
+                continue;
+            }
+
+            const embed = message.embeds[0];
+            if (embed.title === 'New Ticket') {
+                // Wait 1 second before checking the thread to avoid rate limits.
+                await new Promise(resolve => setTimeout(resolve, 1000));
+
+                // Obtain thread id from the embed button "ticket_panel_join_thread_<threadId>"
+                const threadId = message.components[0]?.components?.[1]?.customId.split('ticket_panel_join_thread_')[1];
+                if (!threadId) {
+                    continue;
+                }
+
+                console.log("Updating ticket in ticketsNotifications channel: " + threadId);
+
+                const thread = await channel.guild.channels.fetch(threadId).catch(() => null);
+                if (!thread) {
+                    continue;
+                }
+
+                if (thread.archived) {
+                    await message.edit({
+                        embeds: [
+                            EmbedBuilder.from(embed)
+                            .setTitle("Ticket Closed")
+                            .setColor('#A01A1A')
+                        ]
+                    });
+                } else {
+                    await message.edit({
+                        embeds: [
+                            EmbedBuilder.from(embed)
+                            .setTitle("Ticket Re-opened")
+                            .setColor('#0099FF')
+                        ]
+                    });
+                }
+            }
+        }
+
+        // Update lastMessageId for pagination
+        lastMessageId = messages.last().id;
+
+        // Wait a bit before the next batch to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+}
