@@ -464,6 +464,16 @@ async function fetchAndProcessMessages(channel, limit = 100) {
                         ]
                     });
                 }
+            } else if (embed.title === 'Ticket Re-opened') {
+                if (thread.archived) {
+                    await message.edit({
+                        embeds: [
+                            EmbedBuilder.from(embed)
+                            .setTitle("Ticket Closed")
+                            .setColor('#A01A1A')
+                        ]
+                    });
+                }
             }
         }
 
