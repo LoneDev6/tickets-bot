@@ -397,7 +397,7 @@ function onReady() {
             return;
         }
 
-        console.log('Checking tickets...');
+        client.logger.info('Checking tickets...');
         fetchAndProcessMessages(notificationChannel, 100);
     }
     setInterval(updateTicketsNotificationChannel, 300_000);
@@ -419,7 +419,7 @@ async function fetchAndProcessMessages(channel, limit = 100) {
             break; // No more messages to process
         }
 
-        console.log('Fetched messages from ticketsNotifications channel.');
+        client.logger.info('Fetched messages from ticketsNotifications channel.');
 
         // Iterate over each message
         for (const message of messages.values()) {
@@ -427,24 +427,24 @@ async function fetchAndProcessMessages(channel, limit = 100) {
                 continue;
             }
 
+            // Wait 1 second before checking the thread to avoid rate limits.
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            // Obtain thread id from the embed button "ticket_panel_join_thread_<threadId>"
+            const threadId = message.components[0]?.components?.[1]?.customId.split('ticket_panel_join_thread_')[1];
+            if (!threadId) {
+                continue;
+            }
+
+            client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId);
+
+            const thread = await channel.guild.channels.fetch(threadId).catch(() => null);
+            if (!thread) {
+                continue;
+            }
+
             const embed = message.embeds[0];
             if (embed.title === 'New Ticket') {
-                // Wait 1 second before checking the thread to avoid rate limits.
-                await new Promise(resolve => setTimeout(resolve, 1000));
-
-                // Obtain thread id from the embed button "ticket_panel_join_thread_<threadId>"
-                const threadId = message.components[0]?.components?.[1]?.customId.split('ticket_panel_join_thread_')[1];
-                if (!threadId) {
-                    continue;
-                }
-
-                console.log("Updating ticket in ticketsNotifications channel: " + threadId);
-
-                const thread = await channel.guild.channels.fetch(threadId).catch(() => null);
-                if (!thread) {
-                    continue;
-                }
-
                 if (thread.archived) {
                     await message.edit({
                         embeds: [
@@ -453,7 +453,9 @@ async function fetchAndProcessMessages(channel, limit = 100) {
                             .setColor('#A01A1A')
                         ]
                     });
-                } else {
+                }
+            } else if (embed.title === 'Ticket Closed') {
+                if (!thread.archived) {
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
