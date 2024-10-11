@@ -435,9 +435,6 @@ async function fetchAndProcessMessages(channel, limit = 100) {
             if (!threadId) {
                 continue;
             }
-
-            client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId);
-
             const thread = await channel.guild.channels.fetch(threadId).catch(() => null);
             if (!thread) {
                 continue;
@@ -446,6 +443,7 @@ async function fetchAndProcessMessages(channel, limit = 100) {
             const embed = message.embeds[0];
             if (embed.title === 'New Ticket') {
                 if (thread.archived) {
+                    client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to closed.");
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
@@ -456,6 +454,7 @@ async function fetchAndProcessMessages(channel, limit = 100) {
                 }
             } else if (embed.title === 'Ticket Closed') {
                 if (!thread.archived) {
+                    client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to re-opened.");
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
@@ -466,6 +465,7 @@ async function fetchAndProcessMessages(channel, limit = 100) {
                 }
             } else if (embed.title === 'Ticket Re-opened') {
                 if (thread.archived) {
+                    client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to closed.");
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
