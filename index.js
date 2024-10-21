@@ -185,14 +185,13 @@ client.on('interactionCreate', async (interaction) => {
             await interaction.deferReply();
 
             // Check if it matches regex "Payment: username (0000000000000)"
-            if (thread.name.match(/^(.*): (.+) \((\d+)\) (.*)$/)) {
+            if (thread.name.match(/^(.*): (.+) \((\d+)\)(| .*)$/)) {
                 // Replace the first matching group with "Invalid".
                 const newName = thread.name.replace(/^.*?: (.+ \(\d+\))$/, 'Invalid: $1');
                 await thread.setName(newName);
             }
 
-            const reason = interaction.options.getString('reason');
-
+            const reason = interaction.options.getString('reason') || 'No reason.';
             if(!thread.locked) {
                 await thread.setLocked(true, reason ? reason : 'No reason.');
             }
