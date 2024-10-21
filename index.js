@@ -390,11 +390,12 @@ client.on('interactionCreate', async (interaction) => {
                 .join('\n') || 'No product roles';
 
 
-            // Search in channel "989167088742572072" for the verification thread. The thread name contains the user id in its name:
-            const verificationChannel = interaction.guild.channels.cache.get('989167088742572072');
+            // Search in verification channel for the verification thread. The thread name contains the user id in its name.
+            const verificationChannelId = '989167088742572072';
+            const verificationChannel = interaction.guild.channels.cache.get(verificationChannelId);
             let verificationThread;
             if(!verificationChannel) {
-                console.error('The verification channel does not exist.');
+                console.error(`The verification channel "${verificationChannelId}" does not exist.`);
             } else {
                 verificationThread = verificationChannel.threads.cache.find(thread => thread.name.includes(interaction.user.id));
             }
@@ -815,6 +816,30 @@ async function updateTicketsNotificationChannel() {
                         ]
                     });
                 }
+
+                // Check ticket last activity to see if the ticket last activity is more than 30 days ago.
+                // If so, lock the ticket.
+                const lastMessage = await thread.messages.fetch({ limit: 1 });
+                if(lastMessage.size > 0) {
+                    const lastMessageDate = lastMessage.first().createdAt;
+                    const now = new Date();
+                    const diffTime = Math.abs(now - lastMessageDate);
+                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                    if(diffDays >= 30) {
+                        await thread.setLocked(true, 'No activity in 30 days.');
+                        await thread.setArchived(true, 'No activity in 30 days.');
+                        client.logger.info(`Ticket locked due to inactivity: #${thread.name} - ${thread.id}.`);
+
+                        await message.edit({
+                            embeds: [
+                                EmbedBuilder.from(embed)
+                                .setTitle("Ticket Locked Due To Inactivity: `" + threadId + "`")
+                                .setColor('#333333')
+                            ]
+                        });
+                    }
+                }
+
             } else if(!thread.archived) {
                 if(!embed.title.startsWith('Ticket Re-opened') && !embed.title.startsWith('New Ticket')) {
                     client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to re-opened.");
