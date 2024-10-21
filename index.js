@@ -817,7 +817,7 @@ async function updateTicketsNotificationChannel() {
                     });
                 }
             } else if(!thread.archived) {
-                if(embed.title.startsWith('Ticket Re-opened') || embed.title.startsWith('New Ticket')) {
+                if(!embed.title.startsWith('Ticket Re-opened') && !embed.title.startsWith('New Ticket')) {
                     client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to re-opened.");
                     await message.edit({
                         embeds: [
