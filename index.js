@@ -182,6 +182,8 @@ client.on('interactionCreate', async (interaction) => {
                 });
             }
 
+            await interaction.deferReply();
+
             // Check if it matches regex "Payment: username (0000000000000)"
             if (thread.name.match(/^(.*): (.+) \((\d+)\) (.*)$/)) {
                 // Replace the first matching group with "Invalid".
@@ -190,15 +192,6 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             const reason = interaction.options.getString('reason');
-            await thread.send({
-                embeds: [new EmbedBuilder()
-                    .setColor('#0099FF')
-                    .setTitle('Invalid Thread Locked')
-                    .setDescription(`This thread has been locked by <@${interaction.user.id}>.\nReason: ${reason}`)
-                ]
-            });
-
-            await interaction.deferReply();
 
             if(!thread.locked) {
                 await thread.setLocked(true, reason ? reason : 'No reason.');
@@ -208,7 +201,13 @@ client.on('interactionCreate', async (interaction) => {
                 await thread.setArchived(true, reason ? reason : 'No reason.');
             }
 
-            return;
+            return await interaction.editReply({
+                embeds: [new EmbedBuilder()
+                    .setColor('#0099FF')
+                    .setTitle('Invalid Thread Locked')
+                    .setDescription(`This thread has been locked by <@${interaction.user.id}>.\nReason: ${reason}`)
+                ]
+            });
         }
     }
 
