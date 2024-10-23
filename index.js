@@ -127,16 +127,8 @@ function onReady() {
 }
 
 client.on('interactionCreate', async (interaction) => {
-
     if (interaction.isCommand()) {
         if (interaction.commandName === 'rename') {
-            if(!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-                return await interaction.reply({
-                    content: 'You do not have the required permissions to use this command.',
-                    ephemeral: true
-                });
-            }
-
             // Check if it matches regex "Invalid: Username (289137568144949248) wow! nice thread"
             const match = interaction.channel.name.match(/^(.*): (.+) \((\d+)\)(| .*)$/);
             if (match) {
