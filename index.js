@@ -578,10 +578,14 @@ client.on('interactionCreate', async (interaction) => {
 
 // On thread closed or locked or reopened
 client.on('threadUpdate', async (oldThread, newThread) => {
-    const isArchived = oldThread.archived === false && newThread.archived === true;
-    const isLocked = oldThread.locked === false && newThread.locked === true;
-    const isReopened = oldThread.archived === true && newThread.archived === false;
-    const status = isLocked ? 'locked' : isArchived ? 'closed' : isReopened ? 're-opened' : null;
+    let status = null;
+    if(oldThread.locked === false && newThread.locked === true) {
+        status = 'locked';
+    } else if(oldThread.archived === false && newThread.archived === true) {
+        status = 'closed';
+    } else if(oldThread.archived === true && newThread.archived === false) {
+        status = 're-opened';
+    }
     if (status) {
         const notificationChannel = client.channels.cache.get(config.channels.ticketsNotifications);
         if (!notificationChannel) {
