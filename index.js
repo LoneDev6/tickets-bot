@@ -110,6 +110,9 @@ function onReady() {
     setInterval(updateTicketsNotificationChannel, 5 * 60 * 1000);
     updateTicketsNotificationChannel();
 
+    setInterval(closeInactiveThreads, 24 * 60 * 60 * 1000);
+    closeInactiveThreads();
+
     client.guilds.cache.forEach(async guild => {
         await guild.commands.create(new SlashCommandBuilder()
         .setName('rename')
@@ -855,5 +858,53 @@ async function updateTicketsNotificationChannel() {
 
         // Wait a bit before the next batch to avoid rate limits
         await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+}
+
+async function closeInactiveThreads() {
+    // Check if last thread message is older than 7 days, if so, close the thread.
+    // Find threads in the channel config.channels.tickets
+    const ticketsChannel = client.channels.cache.get(config.channels.tickets);
+    if(!ticketsChannel) {
+        client.logger.error(`Failed to close inactive threads. The channel ${config.channels.tickets} does not exist.`);
+        return;
+    }
+
+    const closedThreads = [];
+
+    // Get all threads in the channel
+    const threads = await ticketsChannel.threads.fetch();
+    for(const thread of threads.values()) {
+        if(thread.archived || thread.locked) {
+            continue;
+        }
+        const lastMessage = await thread.messages.fetch({ limit: 1 });
+        if(lastMessage.size > 0) {
+            const lastMessageDate = lastMessage.first().createdAt;
+            const now = new Date();
+            const diffTime = Math.abs(now - lastMessageDate);
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            if(diffDays >= 7) {
+                await thread.setArchived(true, 'No activity in 7 days.');
+                client.logger.info(`Ticket locked due to inactivity: #${thread.name} - ${thread.id}.`);
+                closedThreads.push(thread);
+            }
+        }
+    }
+
+    if(closedThreads.length > 0) {
+        const notificationChannel = client.channels.cache.get(config.channels.ticketsNotifications);
+        if(!notificationChannel) {
+            client.logger.error(`Failed to close inactive threads. The channel ${config.channels.ticketsNotifications} does not exist.`);
+            return;
+        }
+
+        await notificationChannel.send({
+            embeds: [new EmbedBuilder()
+                .setColor('#0099FF')
+                .setTitle('Inactive Tickets Closed')
+                .setDescription(closedThreads.map(thread => `<#${thread.id}>`).join('\n'))
+            ]
+        });
     }
 }
