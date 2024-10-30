@@ -110,8 +110,8 @@ function onReady() {
     setInterval(updateTicketsNotificationChannel, 5 * 60 * 1000);
     updateTicketsNotificationChannel();
 
-    setInterval(closeInactiveThreads, 24 * 60 * 60 * 1000);
-    closeInactiveThreads();
+    //setInterval(closeInactiveThreads, 24 * 60 * 60 * 1000);
+    //closeInactiveThreads();
 
     client.guilds.cache.forEach(async guild => {
         await guild.commands.create(new SlashCommandBuilder()
@@ -861,6 +861,7 @@ async function updateTicketsNotificationChannel() {
     }
 }
 
+// This shit doesn't work as Discord automatically hides threads from the list, after 7 days. fuck.
 async function closeInactiveThreads() {
     // Check if last thread message is older than 7 days, if so, close the thread.
     // Find threads in the channel config.channels.tickets
@@ -873,7 +874,7 @@ async function closeInactiveThreads() {
     const closedThreads = [];
 
     // Get all threads in the channel
-    const threads = await ticketsChannel.threads.fetch();
+    const threads = await ticketsChannel.threads.cache;
     for(const thread of threads.values()) {
         if(thread.archived || thread.locked) {
             continue;
@@ -893,9 +894,9 @@ async function closeInactiveThreads() {
     }
 
     if(closedThreads.length > 0) {
-        const notificationChannel = client.channels.cache.get(config.channels.ticketsNotifications);
+        const notificationChannel = client.channels.cache.get(config.channels.ticketsClosedNotifications);
         if(!notificationChannel) {
-            client.logger.error(`Failed to close inactive threads. The channel ${config.channels.ticketsNotifications} does not exist.`);
+            client.logger.error(`Failed to close inactive threads. The channel ${config.channels.ticketsClosedNotifications} does not exist.`);
             return;
         }
 
