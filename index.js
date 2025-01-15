@@ -58,35 +58,37 @@ client.on('messageCreate', async message => {
     if (message.channel.type === "dm")
         return
 
-    if (message.author.id === '289137568144949248' && message.content === "aaacreateThreadPanel") { 
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId('ticket_panel_create_thread_generic')
-                .setLabel('Generic')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji('📩'),
-            new ButtonBuilder()
-                .setCustomId('ticket_panel_create_thread_payment')
-                .setLabel('Payment Issue')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji('💰')
-        );
+    if (message.author.id === '289137568144949248') {
+        if(message.content === "aaacreateThreadPanel") {
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('ticket_panel_create_thread_generic')
+                    .setLabel('Generic')
+                    .setStyle(ButtonStyle.Danger)
+                    .setEmoji('📩'),
+                new ButtonBuilder()
+                    .setCustomId('ticket_panel_create_thread_payment')
+                    .setLabel('Payment Issue')
+                    .setStyle(ButtonStyle.Primary)
+                    .setEmoji('💰')
+            );
 
-        const embed = new EmbedBuilder()
-            .setTitle('Private Support Ticket')
-            .setDescription(`## Invalid tickets will be deleted without any warning
-To ask for support about plugins please use the public support channels after verifying in https://discord.com/channels/533407895010803753/989167088742572072
-## Private tickets are only for rare occasions
-Please make sure to read the various tutorials and search on the Discord server or Github before creating a ticket.
-Do not abuse the ticket system.`)
-            .setColor('#a0401a');
+            const embed = new EmbedBuilder()
+                .setTitle('Private Support Ticket')
+                .setDescription(`## Invalid tickets will be deleted without any warning
+    To ask for support about plugins please use the public support channels after verifying in https://discord.com/channels/533407895010803753/989167088742572072
+    ## Private tickets are only for rare occasions
+    Please make sure to read the various tutorials and search on the Discord server or Github before creating a ticket.
+    Do not abuse the ticket system.`)
+                .setColor('#a0401a');
 
-        // Send the message with the buttons and embed
-        return await message.channel.send({
-            content: '',
-            components: [row],
-            embeds: [embed]
-        });
+            // Send the message with the buttons and embed
+            return await message.channel.send({
+                content: '',
+                components: [row],
+                embeds: [embed]
+            });
+        }
     }
 });
 
