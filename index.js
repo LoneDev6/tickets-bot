@@ -953,6 +953,9 @@ async function updateTicketsNotificationChannel() {
                     if(diffDays >= 30) {
                         if(!thread.locked) {
                             await thread.setLocked(true, 'No activity in 30 days.');
+                        }
+            
+                        if(!thread.archived) {
                             await thread.setArchived(true, 'No activity in 30 days.');
                         }
                         client.logger.info(`Ticket locked due to inactivity: #${thread.name} - ${thread.id}.`);
