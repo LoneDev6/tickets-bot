@@ -330,8 +330,16 @@ client.on('interactionCreate', async (interaction) => {
                     ephemeral: true
                 });
             }
+            
+            const ticketsOpenedChannel = interaction.guild.channels.cache.get(config.channels.ticketsOpened);
+            if(!ticketsOpenedChannel) {
+                return await interaction.reply({
+                    content: `The tickets opened notification channel${config.channels.ticketsNotifications} does not exist. Please contact an administrator.`,
+                    ephemeral: true
+                });
+            }
 
-            await notificationChannel.send({
+            const msgContents = {
                 embeds: [new EmbedBuilder()
                     .setColor('#0099FF')
                     .setTitle('New Ticket: `' + thread.id + "`")
@@ -351,7 +359,9 @@ client.on('interactionCreate', async (interaction) => {
                     .setLabel('Join Ticket')
                     .setStyle(ButtonStyle.Primary)
                 )],
-            });
+            };
+            await notificationChannel.send(msgContents);
+            await ticketsOpenedChannel.send(msgContents);
     
             // Send a message to the user in the thread
             await thread.send({
@@ -598,8 +608,17 @@ client.on('threadUpdate', async (oldThread, newThread) => {
             return;
         }
 
+        const ticketsOpenedChannel = client.channels.cache.get(config.channels.ticketsOpened);
+        if(!ticketsOpenedChannel) {
+            return await interaction.reply({
+                content: `The tickets opened notification channel${config.channels.ticketsNotifications} does not exist. Please contact an administrator.`,
+                ephemeral: true
+            });
+        }
+
         // Find the message in the notification channel that corresponds to this thread
         let lastMessageId = null;
+        let stop = false;
         while (true) {
             // Fetch the messages in batches
             const options = { limit: 20 };
@@ -662,11 +681,27 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                                 .setColor('#0099FF')
                         ]
                     });
+
+                    // Send a copy of the message to the ticketsOpened channel.
+                    await ticketsOpenedChannel.send({
+                        content: '',
+                        embeds: [
+                            EmbedBuilder.from(embed)
+                                .setTitle("Ticket Re-opened: `" + newThread.id + "`")
+                                .setColor('#0099FF')
+                        ],
+                        components: message.components
+                    });
+
                     break;
                 }
 
                 // No need to continue searching for the message, we found it.
-                return;
+                stop = true;
+            }
+
+            if(stop) {
+                break;
             }
 
             // Update lastMessageId for pagination
@@ -674,6 +709,46 @@ client.on('threadUpdate', async (oldThread, newThread) => {
 
             // Wait a bit before the next batch to avoid rate limits
             await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+
+        // Check if the message is already in the ticketsOpened channel, by iterating message in the ticketsOpened channel.
+        // If the status is closed, delete the message from the ticketsOpened channel.
+        if(status === 'closed' || status === 'locked') {
+            lastMessageId = null;
+            while(true) {
+                // Fetch the messages in batches
+                const options = { limit: 20 };
+                if (lastMessageId) {
+                    options.before = lastMessageId;
+                }
+
+                const messages = await ticketsOpenedChannel.messages.fetch(options);
+                if (messages.size === 0) {
+                    break; // No more messages to process
+                }
+
+                // Iterate over each message
+                for (const message of messages.values()) {
+                    if (message.embeds.length === 0) {
+                        continue;
+                    }
+
+                    // Obtain thread id from the embed button "ticket_panel_join_thread_<threadId>"
+                    const threadId = message.components[0]?.components?.[1]?.customId.split('ticket_panel_join_thread_')[1];
+                    console.log("Checking threadId: " + threadId);
+                    if (!threadId) {
+                        continue;
+                    }
+
+                    if(threadId === newThread.id) {
+                        await message.delete();
+                        break;
+                    }
+                }
+
+                // Update lastMessageId for pagination
+                lastMessageId = messages.last().id;
+            }
         }
     }
 });
@@ -687,6 +762,7 @@ client.on('threadDelete', async thread => {
 
     // Find the message in the notification channel that corresponds to this thread
     let lastMessageId = null;
+    let stop = false;
     while (true) {
         // Fetch the messages in batches
         const options = { limit: 20 };
@@ -727,7 +803,11 @@ client.on('threadDelete', async thread => {
             });
 
             // No need to continue searching for the message, we found it.
-            return;
+            stop = true;
+        }
+
+        if(stop) {
+            break;
         }
 
         // Update lastMessageId for pagination
@@ -735,6 +815,50 @@ client.on('threadDelete', async thread => {
 
         // Wait a bit before the next batch to avoid rate limits
         await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+
+    // Find it also in the ticketsOpened channel and delete it.
+    const ticketsOpenedChannel = client.channels.cache.get(config.channels.ticketsOpened);
+    if(!ticketsOpenedChannel) {
+        client.logger.error(`Failed to delete the message from the ticketsOpened channel. The channel ${config.channels.ticketsOpened} does not exist.`);
+        return;
+    }
+
+    lastMessageId = null;
+    while(true) {
+        // Fetch the messages in batches
+        const options = { limit: 20 };
+        if (lastMessageId) {
+            options.before = lastMessageId;
+        }
+
+        const messages = await ticketsOpenedChannel.messages.fetch(options);
+        if (messages.size === 0) {
+            break; // No more messages to process
+        }
+
+        // Iterate over each message
+        for (const message of messages.values()) {
+            if (message.embeds.length === 0) {
+                continue;
+            }
+
+            // Obtain thread id from the embed button "ticket_panel_join_thread_<threadId>"
+            const threadId = message.components[0]?.components?.[1]?.customId.split('ticket_panel_join_thread_')[1];
+            if (!threadId) {
+                continue;
+            }
+
+            if(threadId === thread.id) {
+                console.log("Deleting message in ticketsOpened channel: " + threadId);
+                await message.delete();
+                break;
+            }
+        }
+
+        // Update lastMessageId for pagination
+        lastMessageId = messages.last().id;
     }
 });
 
@@ -827,8 +951,10 @@ async function updateTicketsNotificationChannel() {
                     const diffTime = Math.abs(now - lastMessageDate);
                     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
                     if(diffDays >= 30) {
-                        await thread.setLocked(true, 'No activity in 30 days.');
-                        await thread.setArchived(true, 'No activity in 30 days.');
+                        if(!thread.locked) {
+                            await thread.setLocked(true, 'No activity in 30 days.');
+                            await thread.setArchived(true, 'No activity in 30 days.');
+                        }
                         client.logger.info(`Ticket locked due to inactivity: #${thread.name} - ${thread.id}.`);
 
                         await message.edit({
