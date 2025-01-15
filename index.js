@@ -952,7 +952,7 @@ async function updateTicketsNotificationChannel() {
                     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
                     if(diffDays >= 30) {
                         if(!thread.locked) {
-                            await thread.setLocked(true, 'No activity in 30 days.');
+                            await thread.setLocked(true, 'No activity in 30 days.').catch(() => null);
                         }
             
                         if(!thread.archived) {
