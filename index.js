@@ -655,7 +655,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                 const embed = message.embeds[0];
                 switch(status) {
                     case 'closed':
-                    client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to closed.");
+                    client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + threadId + " to closed.");
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
@@ -665,7 +665,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                     });
                     break;
                 case 'locked':
-                    client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to locked.");
+                    client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + threadId + " to locked.");
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
@@ -675,7 +675,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                     });
                     break;
                 case 're-opened':
-                    client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to re-opened.");
+                    client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + threadId + " to re-opened.");
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
@@ -737,7 +737,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
 
                     // Obtain thread id from the embed button "ticket_panel_join_thread_<threadId>"
                     const threadId = message.components[0]?.components?.[1]?.customId.split('ticket_panel_join_thread_')[1];
-                    console.log("Checking threadId: " + threadId);
+                    console.log("threadUpdate - Checking threadId: " + threadId);
                     if (!threadId) {
                         continue;
                     }
