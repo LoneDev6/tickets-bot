@@ -792,7 +792,7 @@ client.on('threadDelete', async thread => {
 
             const embed = message.embeds[0];
 
-            client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to deleted.");
+            client.logger.info("threadDelete - Updating ticket in ticketsNotifications channel: " + threadId + " to deleted.");
             await message.edit({
                 embeds: [
                     EmbedBuilder.from(embed)
@@ -906,7 +906,7 @@ async function forceUpdateTicketsNotificationChannel() {
             const thread = await notificationChannel.guild.channels.fetch(threadId).catch(() => null);
             if (!thread) {
                 if(!embed.title.startsWith('Ticket Deleted')) {
-                    client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to deleted.");
+                    client.logger.info("forceUpdateTicketsNotificationChannel - Updating ticket in ticketsNotifications channel: " + threadId + " to deleted.");
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
@@ -920,7 +920,7 @@ async function forceUpdateTicketsNotificationChannel() {
 
             if(thread.locked) {
                 if(!embed.title.startsWith('Ticket Locked')) {
-                    client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to locked.");
+                    client.logger.info("forceUpdateTicketsNotificationChannel - Updating ticket in ticketsNotifications channel: " + threadId + " to locked.");
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
@@ -931,7 +931,7 @@ async function forceUpdateTicketsNotificationChannel() {
                 }
             } else if(thread.archived) {
                 if(!embed.title.startsWith('Ticket Closed')) {
-                    client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to closed.");
+                    client.logger.info("forceUpdateTicketsNotificationChannel - Updating ticket in ticketsNotifications channel: " + threadId + " to closed.");
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
@@ -942,7 +942,7 @@ async function forceUpdateTicketsNotificationChannel() {
                 }
             } else if(!thread.archived) {
                 if(!embed.title.startsWith('Ticket Re-opened') && !embed.title.startsWith('New Ticket')) {
-                    client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to re-opened.");
+                    client.logger.info("forceUpdateTicketsNotificationChannel - Updating ticket in ticketsNotifications channel: " + threadId + " to re-opened.");
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
