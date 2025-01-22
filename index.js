@@ -94,7 +94,7 @@ Do not abuse the ticket system.
     }
 });
 
-async function checkIfHasExceededNumberOfThreads(interaction) {
+async function hasReachedMaxNumberOfThreads(interaction) {
     // Iterate through threads and check if the user already has max 1 opened thread in the recent 48 hours.
     let threadCount = 0;
     await interaction.channel.threads.cache.forEach(thread => {
@@ -111,11 +111,8 @@ async function checkIfHasExceededNumberOfThreads(interaction) {
 }
 
 function onReady() {
-    setInterval(updateTicketsNotificationChannel, 5 * 60 * 1000);
-    updateTicketsNotificationChannel();
-
-    //setInterval(closeInactiveThreads, 24 * 60 * 60 * 1000);
-    //closeInactiveThreads();
+    // There is no need to iterate with that much frequency. It's just for threads that for some reason didn't generate the `threadUpdate` or `threadDelete` events.
+    setInterval(forceUpdateTicketsNotificationChannel, 20 * 60 * 1000);
 
     client.guilds.cache.forEach(async guild => {
         await guild.commands.create(new SlashCommandBuilder()
@@ -299,7 +296,7 @@ client.on('interactionCreate', async (interaction) => {
 
         if(interaction.customId.startsWith('modal_ticket_panel_create_thread_')) {
 
-            if(await checkIfHasExceededNumberOfThreads(interaction)) {
+            if(await hasReachedMaxNumberOfThreads(interaction)) {
                 return await interaction.reply({
                     content: 'You have reached the maximum amount of open threads. Please wait for a staff member to assist you.',
                     ephemeral: true
@@ -522,7 +519,7 @@ client.on('interactionCreate', async (interaction) => {
 
         if (interaction.customId.startsWith('ticket_panel_create_thread_')) {
 
-            if(await checkIfHasExceededNumberOfThreads(interaction)) {
+            if(await hasReachedMaxNumberOfThreads(interaction)) {
                 return await interaction.reply({
                     content: 'You have reached the maximum amount of open threads. Please wait for a staff member to assist you.',
                     ephemeral: true
@@ -868,7 +865,7 @@ client.on('threadDelete', async thread => {
 // Schedule a task that will iterate through all the messages in the tickets notification channel and edits the embed color to gray if the ticket is closed, and rename
 // the button to "Re-open" if the ticket is closed. Also rename the title to "Ticket Closed" if the ticket is closed.
 // This is useful to keep the notification channel clean and to avoid pinging everyone for no reason.
-async function updateTicketsNotificationChannel() {
+async function forceUpdateTicketsNotificationChannel() {
     const notificationChannel = client.channels.cache.get(config.channels.ticketsNotifications);
     if(!notificationChannel)
     {
@@ -943,35 +940,6 @@ async function updateTicketsNotificationChannel() {
                         ]
                     });
                 }
-
-                // Check ticket last activity to see if the ticket last activity is more than 30 days ago.
-                // If so, lock the ticket.
-                const lastMessage = await thread.messages.fetch({ limit: 1 });
-                if(lastMessage.size > 0) {
-                    const lastMessageDate = lastMessage.first().createdAt;
-                    const now = new Date();
-                    const diffTime = Math.abs(now - lastMessageDate);
-                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                    if(diffDays >= 30) {
-                        if(!thread.locked) {
-                            await thread.setLocked(true, 'No activity in 30 days.').catch(() => null);
-                        }
-            
-                        if(!thread.archived) {
-                            await thread.setArchived(true, 'No activity in 30 days.');
-                        }
-                        client.logger.info(`Ticket locked due to inactivity: #${thread.name} - ${thread.id}.`);
-
-                        await message.edit({
-                            embeds: [
-                                EmbedBuilder.from(embed)
-                                .setTitle("Ticket Locked Due To Inactivity: `" + threadId + "`")
-                                .setColor('#333333')
-                            ]
-                        });
-                    }
-                }
-
             } else if(!thread.archived) {
                 if(!embed.title.startsWith('Ticket Re-opened') && !embed.title.startsWith('New Ticket')) {
                     client.logger.info("Updating ticket in ticketsNotifications channel: " + threadId + " to re-opened.");
@@ -991,54 +959,5 @@ async function updateTicketsNotificationChannel() {
 
         // Wait a bit before the next batch to avoid rate limits
         await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-}
-
-// This shit doesn't work as Discord automatically hides threads from the list, after 7 days. fuck.
-async function closeInactiveThreads() {
-    // Check if last thread message is older than 7 days, if so, close the thread.
-    // Find threads in the channel config.channels.tickets
-    const ticketsChannel = client.channels.cache.get(config.channels.tickets);
-    if(!ticketsChannel) {
-        client.logger.error(`Failed to close inactive threads. The channel ${config.channels.tickets} does not exist.`);
-        return;
-    }
-
-    const closedThreads = [];
-
-    // Get all threads in the channel
-    const threads = await ticketsChannel.threads.cache;
-    for(const thread of threads.values()) {
-        if(thread.archived || thread.locked) {
-            continue;
-        }
-        const lastMessage = await thread.messages.fetch({ limit: 1 });
-        if(lastMessage.size > 0) {
-            const lastMessageDate = lastMessage.first().createdAt;
-            const now = new Date();
-            const diffTime = Math.abs(now - lastMessageDate);
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            if(diffDays >= 7) {
-                await thread.setArchived(true, 'No activity in 7 days.');
-                client.logger.info(`Ticket locked due to inactivity: #${thread.name} - ${thread.id}.`);
-                closedThreads.push(thread);
-            }
-        }
-    }
-
-    if(closedThreads.length > 0) {
-        const notificationChannel = client.channels.cache.get(config.channels.ticketsClosedNotifications);
-        if(!notificationChannel) {
-            client.logger.error(`Failed to close inactive threads. The channel ${config.channels.ticketsClosedNotifications} does not exist.`);
-            return;
-        }
-
-        await notificationChannel.send({
-            embeds: [new EmbedBuilder()
-                .setColor('#0099FF')
-                .setTitle('Inactive Tickets Closed')
-                .setDescription(closedThreads.map(thread => `<#${thread.id}>`).join('\n'))
-            ]
-        });
     }
 }
