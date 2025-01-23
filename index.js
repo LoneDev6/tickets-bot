@@ -76,6 +76,7 @@ client.on('messageCreate', async message => {
         // Schedule that the message will be updated in 1 second to avoid rate limits. It will be cancelled if another message is sent.
         const NOTIFICATION_MESSAGE_UPDATE_DELAY = 5000;
         notificationMessagesEditScheduledTasks[thread.id] = setTimeout(async () => {
+            delete notificationMessagesEditScheduledTasks[thread.id];
              // Update the messages with id `notificationMessageId` and id `openedMessageId` by adding info about who is the last user who sent a message.
             const notificationChannel = message.guild.channels.cache.get(config.channels.ticketsNotifications);
             if(!notificationChannel) {
@@ -178,8 +179,6 @@ client.on('messageCreate', async message => {
             {
                 client.logger.error(`messageCreate - Failed to update the tickets notification channel ${thread.id}. The message ${data.notificationMessageId} does not exist.`);
             }
-            
-            delete notificationMessagesEditScheduledTasks[thread.id];
         }, NOTIFICATION_MESSAGE_UPDATE_DELAY);
     }
 
@@ -643,9 +642,6 @@ client.on('interactionCreate', async (interaction) => {
                 });
             }
 
-            // Remove all buttons from the message
-            await interaction.message.edit({ components: [] });
-
             await interaction.channel.setArchived(false);
 
             client.logger.info(`Ticket re-opened by @${interaction.member.user.tag} (${interaction.member.id}) in #${interaction.channel.name} (${interaction.channel.id}).`);
@@ -727,6 +723,8 @@ client.on('interactionCreate', async (interaction) => {
                     .setTitle('Users In Ticket')
                     .setDescription(description);
             }
+
+            delete notificationMessagesEditScheduledTasks[thread.id];
             await interaction.message.edit({ embeds: embeds });
 
             return await interaction.reply({
@@ -739,7 +737,11 @@ client.on('interactionCreate', async (interaction) => {
 
 // On thread closed or locked or reopened
 client.on('threadUpdate', async (oldThread, newThread) => {
-    client.logger.info(`threadUpdate - Thread updated: ${newThread.id} - ${newThread.name} - status ~ locked: ${newThread.locked}, archived: ${newThread.archived}`);
+    if(newThread.parentId !== config.channels.tickets) {
+        return;
+    }
+
+    client.logger.info(`threadUpdate - Thread updated: ${newThread.id} - ${newThread.name} - status ~ locked: ${oldThread.locked}->${newThread.locked}, archived: ${oldThread.archived}->${newThread.archived}`);
 
     let status = null;
     if(newThread.locked !== oldThread.locked || newThread.archived !== oldThread.archived) {
@@ -748,6 +750,8 @@ client.on('threadUpdate', async (oldThread, newThread) => {
         } else {
             status = newThread.archived ? 'closed' : 're-opened';
         }
+    } else {
+        return;
     }
 
     if (status) {
@@ -794,6 +798,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                         value: `<t:${Math.floor(Date.now() / 1000)}:R>\nReason: ${data.closedLockedReason || 'No reason.'}`
                     });
 
+                    delete notificationMessagesEditScheduledTasks[newThread.id];
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
@@ -822,6 +827,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                         value: `<t:${Math.floor(Date.now() / 1000)}:R>\nReason: ${data.closedLockedReason || 'No reason.'}`
                     });
                     
+                    delete notificationMessagesEditScheduledTasks[newThread.id];
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
@@ -846,6 +852,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                         }
                     }
 
+                    delete notificationMessagesEditScheduledTasks[newThread.id];
                     await message.edit({
                         embeds: [
                             EmbedBuilder.from(embed)
@@ -941,6 +948,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                     switch(status) {
                         case 'closed':
                         client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + threadId + " to closed.");
+                        delete notificationMessagesEditScheduledTasks[newThread.id];
                         await message.edit({
                             embeds: [
                                 EmbedBuilder.from(embed)
@@ -951,6 +959,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                         break;
                     case 'locked':
                         client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + threadId + " to locked.");
+                        delete notificationMessagesEditScheduledTasks[newThread.id];
                         await message.edit({
                             embeds: [
                                 EmbedBuilder.from(embed)
@@ -961,6 +970,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                         break;
                     case 're-opened':
                         client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + threadId + " to re-opened.");
+                        delete notificationMessagesEditScheduledTasks[newThread.id];
                         await message.edit({
                             embeds: [
                                 EmbedBuilder.from(embed)
