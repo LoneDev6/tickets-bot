@@ -37,6 +37,8 @@ client.botData = new Enmap({
 	cloneLevel: "deep"
 });
 
+const notificationMessagesEditScheduledTasks = {};
+
 client.logger = require('./utils/logger');
 
 client.on('disconnect', () => {
@@ -71,109 +73,114 @@ client.on('messageCreate', async message => {
             return;
         }
 
-        // Update the messages with id `notificationMessageId` and id `openedMessageId` by adding info about who is the last user who sent a message.
-        const notificationChannel = message.guild.channels.cache.get(config.channels.ticketsNotifications);
-        if(!notificationChannel) {
-            client.logger.error(`Failed to update the tickets notification channel. The channel ${config.channels.ticketsNotifications} does not exist.`);
-            return;
-        }
-
-        const ticketsOpenedNotifyChannel = message.guild.channels.cache.get(config.channels.ticketsOpened);
-        if(!ticketsOpenedNotifyChannel) {
-            client.logger.error(`Failed to update the tickets opened notification channel. The channel ${config.channels.ticketsOpened} does not exist.`);
-            return;
-        }
-
-        try
-        {
-            const notificationMessage = await notificationChannel.messages.fetch(data.notificationMessageId);
-            const embeds = notificationMessage.embeds;
-            // Check if the embed has fields, check if the field text contains "Last Message By" and update it.
-            if(embeds[0].fields) {
-                const lastMessageByField = embeds[0].fields.find(field => field.name === 'Last Message By');
-                if(lastMessageByField) {
-                    const lastMessageBy = `<@${message.author.id}>`;
-                    lastMessageByField.value = lastMessageBy;
-                    lastMessageByField.inline = true;
-                } else {
-                    embeds[0].fields.push({
-                        name: 'Last Message By',
-                        value: `<@${message.author.id}>`,
-                        inline: true
-                    });
-                }
-
-                // Find also "Last Message When" and update it.
-                const lastMessageWhenField = embeds[0].fields.find(field => field.name === 'Last Message When');
-                if(lastMessageWhenField) {
-                    lastMessageWhenField.value = '<t:' + Math.floor(Date.now() / 1000) + ':R>';
-                    lastMessageWhenField.inline = true;
-                } else {
-                    embeds[0].fields.push({
-                        name: 'Last Message When',
-                        value: '<t:' + Math.floor(Date.now() / 1000) + ':R>',
-                        inline: true
-                    });
-                }
-
-                // Remove legacy shit
-                for(const embed of embeds) {
-                    if(embed.title === 'Users In Ticket') {
-                        embeds.splice(embeds.indexOf(embed), 1);
-                        break;
-                    }
-                }
-
-                await thread.members.fetch();
-                const mentions = thread.members.cache.map(member => member.id !== client.user.id ? `<@${member.id}>` : "").filter(mention => mention !== "");
-                const description = mentions.join(', ');
-                const usersInTicket = embeds[0].fields.find(field => field.name === 'Users In Ticket');
-                if(usersInTicket) {
-                    usersInTicket.value = description;
-                    usersInTicket.inline = true;
-                } else {
-                    embeds[0].fields.push({
-                        name: 'Users In Ticket',
-                        value: description,
-                        inline: true
-                    });
-                }
-
-                // Push the message update
-                await notificationMessage.edit({
-                    embeds: embeds
-                });
+        // Schedule that the message will be updated in 1 second to avoid rate limits. It will be cancelled if another message is sent.
+        const NOTIFICATION_MESSAGE_UPDATE_DELAY = 5000;
+        notificationMessagesEditScheduledTasks[thread.id] = setTimeout(async () => {
+             // Update the messages with id `notificationMessageId` and id `openedMessageId` by adding info about who is the last user who sent a message.
+            const notificationChannel = message.guild.channels.cache.get(config.channels.ticketsNotifications);
+            if(!notificationChannel) {
+                client.logger.error(`messageCreate - Failed to update the tickets notification channel. The channel ${config.channels.ticketsNotifications} does not exist.`);
+                return;
             }
 
-            // Copy the message to the ticketsOpened channel.
-            let ticketsOpenedMessage;
+            const ticketsOpenedNotifyChannel = message.guild.channels.cache.get(config.channels.ticketsOpened);
+            if(!ticketsOpenedNotifyChannel) {
+                client.logger.error(`messageCreate - Failed to update the tickets opened notification channel. The channel ${config.channels.ticketsOpened} does not exist.`);
+                return;
+            }
+
             try
             {
-                ticketsOpenedMessage = await ticketsOpenedNotifyChannel.messages.fetch(data.openedMessageId);
-                await ticketsOpenedMessage.edit({
-                    content: '',
-                    embeds: notificationMessage.embeds,
-                    components: notificationMessage.components
-                });
+                const notificationMessage = await notificationChannel.messages.fetch(data.notificationMessageId);
+                const embeds = notificationMessage.embeds;
+                // Check if the embed has fields, check if the field text contains "Last Message By" and update it.
+                if(embeds[0].fields) {
+                    const lastMessageByField = embeds[0].fields.find(field => field.name === 'Last Message By');
+                    if(lastMessageByField) {
+                        const lastMessageBy = `<@${message.author.id}>`;
+                        lastMessageByField.value = lastMessageBy;
+                        lastMessageByField.inline = true;
+                    } else {
+                        embeds[0].fields.push({
+                            name: 'Last Message By',
+                            value: `<@${message.author.id}>`,
+                            inline: true
+                        });
+                    }
+
+                    // Find also "Last Message When" and update it.
+                    const lastMessageWhenField = embeds[0].fields.find(field => field.name === 'Last Message When');
+                    if(lastMessageWhenField) {
+                        lastMessageWhenField.value = '<t:' + Math.floor(Date.now() / 1000) + ':R>';
+                        lastMessageWhenField.inline = true;
+                    } else {
+                        embeds[0].fields.push({
+                            name: 'Last Message When',
+                            value: '<t:' + Math.floor(Date.now() / 1000) + ':R>',
+                            inline: true
+                        });
+                    }
+
+                    // Remove legacy shit
+                    for(const embed of embeds) {
+                        if(embed.title === 'Users In Ticket') {
+                            embeds.splice(embeds.indexOf(embed), 1);
+                            break;
+                        }
+                    }
+
+                    await thread.members.fetch();
+                    const mentions = thread.members.cache.map(member => member.id !== client.user.id ? `<@${member.id}>` : "").filter(mention => mention !== "");
+                    const description = mentions.join(', ');
+                    const usersInTicket = embeds[0].fields.find(field => field.name === 'Users In Ticket');
+                    if(usersInTicket) {
+                        usersInTicket.value = description;
+                        usersInTicket.inline = true;
+                    } else {
+                        embeds[0].fields.push({
+                            name: 'Users In Ticket',
+                            value: description,
+                            inline: true
+                        });
+                    }
+                    
+                    await notificationMessage.edit({
+                        embeds: embeds
+                    });
+                }
+
+                // Copy the message to the ticketsOpened channel.
+                let ticketsOpenedMessage;
+                try
+                {
+                    ticketsOpenedMessage = await ticketsOpenedNotifyChannel.messages.fetch(data.openedMessageId);
+                    await ticketsOpenedMessage.edit({
+                        content: '',
+                        embeds: notificationMessage.embeds,
+                        components: notificationMessage.components
+                    });
+                }
+                catch(error)
+                {
+                    client.logger.error(`messageCreate - Failed to update the tickets opened notification channel ${thread.id}. The message ${data.openedMessageId} does not exist.`);
+                    
+                    ticketsOpenedMessage = await ticketsOpenedNotifyChannel.send({
+                        content: '',
+                        embeds: notificationMessage.embeds,
+                        components: notificationMessage.components
+                    });
+
+                    data.openedMessageId = ticketsOpenedMessage.id;
+                    client.botData.set(`ticket_${message.channelId}`, data);
+                }
             }
             catch(error)
             {
-                client.logger.error(`Failed to update the tickets opened notification channel. The message ${data.openedMessageId} does not exist.`);
-                
-                ticketsOpenedMessage = await ticketsOpenedNotifyChannel.send({
-                    content: '',
-                    embeds: notificationMessage.embeds,
-                    components: notificationMessage.components
-                });
-
-                data.openedMessageId = ticketsOpenedMessage.id;
-                client.botData.set(`ticket_${message.channelId}`, data);
+                client.logger.error(`messageCreate - Failed to update the tickets notification channel ${thread.id}. The message ${data.notificationMessageId} does not exist.`);
             }
-        }
-        catch(error)
-        {
-            client.logger.error(`Failed to update the tickets notification channel. The message ${data.notificationMessageId} does not exist.`);
-        }
+            
+            delete notificationMessagesEditScheduledTasks[thread.id];
+        }, NOTIFICATION_MESSAGE_UPDATE_DELAY);
     }
 
     if (message.author.bot)
@@ -311,20 +318,21 @@ client.on('interactionCreate', async (interaction) => {
                 await thread.setName(newName);
             }
 
-            const reason = interaction.options.getString('reason') || 'No reason.';
+            const reason = interaction.options.getString('reason');
+            if(reason) {
+                const data = client.botData.get(`ticket_${thread.id}`);
+                data.closedLockedReason = reason;
+                client.botData.set(`ticket_${thread.id}`, data);
+            }
             if(!thread.locked) {
                 await thread.setLocked(true, reason ? reason : 'No reason.');
-            }
-
-            if(!thread.archived) {
-                await thread.setArchived(true, reason ? reason : 'No reason.');
             }
 
             return await interaction.editReply({
                 embeds: [new EmbedBuilder()
                     .setColor('#0099FF')
                     .setTitle('Invalid Thread Locked')
-                    .setDescription(`This thread has been locked by <@${interaction.user.id}>.\nReason: ${reason}`)
+                    .setDescription(`This thread has been locked by <@${interaction.user.id}>.\nReason: ${reason || 'No reason.'}`)
                 ]
             });
         }
@@ -387,10 +395,13 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
         else if(interaction.customId === 'modal_ticket_panel_close_thread' || interaction.customId === 'modal_ticket_panel_lock_thread') {
+            const thread = interaction.channel;
             const reason = interaction.fields.getTextInputValue('reason');
-
-            // Remove all buttons from the message
-            await interaction.message.edit({ components: [] });
+            if(reason) {
+                const data = client.botData.get(`ticket_${thread.id}`);
+                data.closedLockedReason = reason;
+                client.botData.set(`ticket_${thread.id}`, data);
+            }
 
             // Send a message to the user in the thread
             await interaction.channel.send({
@@ -408,7 +419,6 @@ client.on('interactionCreate', async (interaction) => {
 
             if(interaction.customId === 'modal_ticket_panel_lock_thread') {
                 await interaction.channel.setLocked(true, reason ? reason : 'No reason.');
-                await interaction.channel.setArchived(true, reason ? reason : 'No reason.');
                 client.logger.info(`Ticket locked by @${interaction.member.user.tag} (${interaction.member.id}) in #${interaction.channel.name} (${interaction.channel.id}).`);
             } else {
                 await interaction.channel.setArchived(true, reason ? reason : 'No reason.');
@@ -419,6 +429,8 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if(interaction.customId.startsWith('modal_ticket_panel_create_thread_')) {
+
+            await interaction.deferUpdate();
 
             if(await hasReachedMaxNumberOfThreads(interaction)) {
                 return await interaction.reply({
@@ -448,7 +460,8 @@ client.on('interactionCreate', async (interaction) => {
             // Send notification to another channel about the new ticket specifying the user and the description
             const notificationChannel = interaction.guild.channels.cache.get(config.channels.ticketsNotifications);
             if(!notificationChannel) {
-                return await interaction.reply({
+                client.logger.error(`The tickets notification channel "${config.channels.ticketsNotifications}" does not exist.`);
+                return await interaction.followUp({
                     content: `The tickets notification channel${config.channels.ticketsNotifications} does not exist. Please contact an administrator.`,
                     ephemeral: true
                 });
@@ -456,7 +469,8 @@ client.on('interactionCreate', async (interaction) => {
             
             const ticketsOpenedNotifyChannel = interaction.guild.channels.cache.get(config.channels.ticketsOpened);
             if(!ticketsOpenedNotifyChannel) {
-                return await interaction.reply({
+                client.logger.error(`The tickets opened notification channel "${config.channels.ticketsOpened}" does not exist.`);
+                return await interaction.followUp({
                     content: `The tickets opened notification channel${config.channels.ticketsOpened} does not exist. Please contact an administrator.`,
                     ephemeral: true
                 });
@@ -562,7 +576,7 @@ client.on('interactionCreate', async (interaction) => {
             await thread.send(`Hello <@${interaction.user.id}>, please wait for a staff member to assist you.\nIn the meantime make sure to read <id:guide>, search on the **Discord** server and search on **Github**.`);
     
             // Send an ephemeral message to the user in the interaction channel so that they can find the new thread easily. 
-            return await interaction.reply({
+            return await interaction.followUp({
                 embeds: [new EmbedBuilder()
                     .setColor('#0099FF')
                     .setTitle('Ticket Created')
@@ -725,7 +739,7 @@ client.on('interactionCreate', async (interaction) => {
 
 // On thread closed or locked or reopened
 client.on('threadUpdate', async (oldThread, newThread) => {
-    client.logger.info(`Thread updated: ${newThread.id} - ${newThread.name} - status ~ locked: ${newThread.locked}, archived: ${newThread.archived}`);
+    client.logger.info(`threadUpdate - Thread updated: ${newThread.id} - ${newThread.name} - status ~ locked: ${newThread.locked}, archived: ${newThread.archived}`);
 
     let status = null;
     if(newThread.locked !== oldThread.locked || newThread.archived !== oldThread.archived) {
@@ -739,16 +753,13 @@ client.on('threadUpdate', async (oldThread, newThread) => {
     if (status) {
         const notificationChannel = client.channels.cache.get(config.channels.ticketsNotifications);
         if (!notificationChannel) {
-            client.logger.error(`Failed to update the tickets notification channel. The channel ${config.channels.ticketsNotifications} does not exist.`);
+            client.logger.error(`threadUpdate - Failed to update the tickets notification channel. The channel ${config.channels.ticketsNotifications} does not exist.`);
             return;
         }
 
         const ticketsOpenedNotifyChannel = client.channels.cache.get(config.channels.ticketsOpened);
         if(!ticketsOpenedNotifyChannel) {
-            return await interaction.reply({
-                content: `The tickets opened notification channel ${config.channels.ticketsOpened} does not exist. Please contact an administrator.`,
-                ephemeral: true
-            });
+            client.logger.error(`threadUpdate - Failed to update the tickets opened notification channel ${newThread.id}. The channel ${config.channels.ticketsOpened} does not exist.`);
         }
 
         if(client.botData.has(`ticket_${newThread.id}`))
@@ -757,16 +768,14 @@ client.on('threadUpdate', async (oldThread, newThread) => {
             const data = client.botData.get(`ticket_${newThread.id}`);
             const message = await notificationChannel.messages.fetch(data.notificationMessageId);
             if(!message) {
-                client.logger.error(`Failed to update the tickets notification channel. The message ${data.notificationMessageId} does not exist.`);
+                client.logger.error(`threadUpdate - Failed to update the tickets notification channel ${newThread.id}. The message ${data.notificationMessageId} does not exist.`);
                 return;
             }
             let ticketOpenedMessage;
             try {
                 ticketOpenedMessage = await ticketsOpenedNotifyChannel.messages.fetch(data.openedMessageId);
             }
-            catch(error) {
-                client.logger.error(`Failed to update the tickets opened notification channel. The message ${data.openedMessageId} does not exist.`);
-            }
+            catch(error){}
 
             const embed = message.embeds[0];
             switch (status) {
@@ -782,7 +791,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                     }
                     embed.fields.push({
                         name: `Closed`,
-                        value: `<t:${Math.floor(Date.now() / 1000)}:R>\nReason: ${newThread.archivedReason || 'No reason.'}`
+                        value: `<t:${Math.floor(Date.now() / 1000)}:R>\nReason: ${data.closedLockedReason || 'No reason.'}`
                     });
 
                     await message.edit({
@@ -810,7 +819,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                     }
                     embed.fields.push({
                         name: `Locked`,
-                        value: `<t:${Math.floor(Date.now() / 1000)}:R>\nReason: ${newThread.archivedReason || 'No reason.'}`
+                        value: `<t:${Math.floor(Date.now() / 1000)}:R>\nReason: ${data.closedLockedReason || 'No reason.'}`
                     });
                     
                     await message.edit({
@@ -845,6 +854,11 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                         ]
                     });
 
+                    // Delete the message from the ticketsOpened channel.
+                    if (ticketOpenedMessage) {
+                        await ticketOpenedMessage.delete();
+                    }
+
                     // Send a copy of the message to the ticketsOpened channel.
                     ticketOpenedMessage = await ticketsOpenedNotifyChannel.send({
                         content: '',
@@ -856,8 +870,33 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                         components: message.components
                     });
 
+                    delete data.closedLockedReason;
                     data.openedMessageId = ticketOpenedMessage.id;
                     client.botData.set(`ticket_${newThread.id}`, data);
+
+                    // Add to the first message the lock and close buttons back. Get the first message from the thread using the ticketInfoMessageId.
+                    try
+                    {
+                        const ticketInfoMessage = await newThread.messages.fetch(data.ticketInfoMessageId);
+                        await ticketInfoMessage.edit({
+                            components: [
+                                new ActionRowBuilder().addComponents(
+                                    new ButtonBuilder()
+                                        .setLabel('Close')
+                                        .setStyle(ButtonStyle.Danger)
+                                        .setCustomId('ticket_panel_close_thread'),
+                                    new ButtonBuilder()
+                                        .setLabel('Lock')
+                                        .setStyle(ButtonStyle.Danger)
+                                        .setCustomId('ticket_panel_lock_thread')
+                                )
+                            ]
+                        });
+                    }
+                    catch(error)
+                    {
+                        client.logger.error(`threadUpdate - Failed to update the ticket information ${newThread.id} first message. The message ${data.ticketInfoMessageId} does not exist.`);
+                    }
 
                     break;
             }
@@ -1005,7 +1044,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
 client.on('threadDelete', async thread => {
     const notificationChannel = client.channels.cache.get(config.channels.ticketsNotifications);
     if (!notificationChannel) {
-        client.logger.error(`Failed to update the tickets notification channel. The channel ${config.channels.ticketsNotifications} does not exist.`);
+        client.logger.error(`threadDelete - Failed to update the tickets notification channel. The channel ${config.channels.ticketsNotifications} does not exist.`);
         return;
     }
 
@@ -1015,7 +1054,7 @@ client.on('threadDelete', async thread => {
         const data = client.botData.get(`ticket_${thread.id}`);
         const message = await notificationChannel.messages.fetch(data.notificationMessageId);
         if(!message) {
-            client.logger.error(`Failed to update the tickets notification channel. The message ${data.notificationMessageId} does not exist.`);
+            client.logger.error(`threadDelete - Failed to update the tickets notification channel. The message ${data.notificationMessageId} does not exist.`);
             return;
         }
         let ticketOpenedMessage;
@@ -1023,7 +1062,7 @@ client.on('threadDelete', async thread => {
             ticketOpenedMessage = await notificationChannel.messages.fetch(data.openedMessageId);
         }
         catch(error) {
-            client.logger.error(`Failed to update the tickets opened notification channel. The message ${data.openedMessageId} does not exist.`);
+            client.logger.error(`threadDelete - Failed to update the tickets opened notification channel. The message ${data.openedMessageId} does not exist.`);
         }
 
         const embed = message.embeds[0];
@@ -1107,7 +1146,7 @@ client.on('threadDelete', async thread => {
     // Find it also in the ticketsOpened channel and delete it.
     const ticketsOpenedNotifyChannel = client.channels.cache.get(config.channels.ticketsOpened);
     if(!ticketsOpenedNotifyChannel) {
-        client.logger.error(`Failed to delete the message from the ticketsOpened channel. The channel ${config.channels.ticketsOpened} does not exist.`);
+        client.logger.error(`threadDelete - Failed to delete the message from the ticketsOpened channel. The channel ${config.channels.ticketsOpened} does not exist.`);
         return;
     }
 
@@ -1137,7 +1176,7 @@ client.on('threadDelete', async thread => {
             }
 
             if(threadId === thread.id) {
-                console.log("Deleting message in ticketsOpened channel: " + threadId);
+                console.log("threadDelete - Deleting message in ticketsOpened channel: " + threadId);
                 await message.delete();
                 break;
             }
@@ -1155,7 +1194,7 @@ async function forceUpdateTicketsNotificationChannel() {
     const notificationChannel = client.channels.cache.get(config.channels.ticketsNotifications);
     if(!notificationChannel)
     {
-        client.logger.error(`Failed to iterate through the tickets notification channel. The channel ${config.channels.ticketsNotifications} does not exist.`);
+        client.logger.error(`forceUpdateTicketsNotificationChannel - Failed to iterate through the tickets notification channel. The channel ${config.channels.ticketsNotifications} does not exist.`);
         return;
     }
 
