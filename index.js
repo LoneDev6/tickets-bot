@@ -320,8 +320,10 @@ client.on('interactionCreate', async (interaction) => {
             const reason = interaction.options.getString('reason');
             if(reason) {
                 const data = client.botData.get(`ticket_${thread.id}`);
-                data.closedLockedReason = reason;
-                client.botData.set(`ticket_${thread.id}`, data);
+                if(data) { // else legacy ticket.
+                    data.closedLockedReason = reason;
+                    client.botData.set(`ticket_${thread.id}`, data);
+                }
             }
             if(!thread.locked) {
                 await thread.setLocked(true, reason ? reason : 'No reason.');
@@ -398,8 +400,10 @@ client.on('interactionCreate', async (interaction) => {
             const reason = interaction.fields.getTextInputValue('reason');
             if(reason) {
                 const data = client.botData.get(`ticket_${thread.id}`);
-                data.closedLockedReason = reason;
-                client.botData.set(`ticket_${thread.id}`, data);
+                if(data) { // else legacy ticket.
+                    data.closedLockedReason = reason;
+                    client.botData.set(`ticket_${thread.id}`, data);
+                }
             }
 
             // Send a message to the user in the thread
