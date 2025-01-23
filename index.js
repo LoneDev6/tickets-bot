@@ -121,6 +121,31 @@ client.on('messageCreate', async message => {
                     embeds: [notificationMessage.embeds[0]]
                 });
             }
+
+            // Copy the message to the ticketsOpened channel.
+            let ticketsOpenedMessage;
+            try
+            {
+                ticketsOpenedMessage = await ticketsOpenedNotifyChannel.messages.fetch(data.openedMessageId);
+                await ticketsOpenedMessage.edit({
+                    content: '',
+                    embeds: notificationMessage.embeds,
+                    components: notificationMessage.components
+                });
+            }
+            catch(error)
+            {
+                client.logger.error(`Failed to update the tickets opened notification channel. The message ${data.openedMessageId} does not exist.`);
+                
+                ticketsOpenedMessage = await ticketsOpenedNotifyChannel.send({
+                    content: '',
+                    embeds: notificationMessage.embeds,
+                    components: notificationMessage.components
+                });
+
+                data.openedMessageId = ticketsOpenedMessage.id;
+                client.botData.set(`ticket_${message.channelId}`, data);
+            }
         }
         catch(error)
         {
@@ -721,62 +746,82 @@ client.on('threadUpdate', async (oldThread, newThread) => {
             }
 
             const embed = message.embeds[0];
-            switch(status) {
+            switch (status) {
                 case 'closed':
-                client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + newThread.id + " to closed.");
-                await message.edit({
-                    embeds: [
-                        EmbedBuilder.from(embed)
-                            .setTitle("Ticket Closed: `" + newThread.id + "`")
-                            .setColor('#a0401a')
-                    ]
-                });
+                    client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + newThread.id + " to closed.");
 
-                // Delete the message from the ticketsOpened channel.
-                if(ticketOpenedMessage) {
-                    await ticketOpenedMessage.delete();
-                }
-                break;
-            case 'locked':
-                client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + newThread.id + " to locked.");
-                await message.edit({
-                    embeds: [
-                        EmbedBuilder.from(embed)
-                            .setTitle("Ticket Locked: `" + newThread.id + "`")
-                            .setColor('#a01a1a')
-                    ]
-                });
+                    // Update the notification message to include the reason for closing the ticket
+                    embed.fields = embed.fields.filter(field => !field.name.includes('Closed') && !field.name.includes('Locked'));
+                    embed.fields.push({
+                        name: `Closed`,
+                        value: `<t:${Math.floor(Date.now() / 1000)}:R>\nReason: ${newThread.archivedReason || 'No reason.'}`
+                    });
 
-                // Delete the message from the ticketsOpened channel.
-                if(ticketOpenedMessage) {
-                    await ticketOpenedMessage.delete();
-                }
-                break;
-            case 're-opened':
-                client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + newThread.id + " to re-opened.");
-                await message.edit({
-                    embeds: [
-                        EmbedBuilder.from(embed)
-                            .setTitle("Ticket Re-opened: `" + newThread.id + "`")
-                            .setColor('#0099FF')
-                    ]
-                });
+                    await message.edit({
+                        embeds: [
+                            EmbedBuilder.from(embed)
+                                .setTitle("Ticket Closed: `" + newThread.id + "`")
+                                .setColor('#a0401a')
+                        ]
+                    });
 
-                // Send a copy of the message to the ticketsOpened channel.
-                ticketOpenedMessage = await ticketsOpenedNotifyChannel.send({
-                    content: '',
-                    embeds: [
-                        EmbedBuilder.from(embed)
-                            .setTitle("Ticket Re-opened: `" + newThread.id + "`")
-                            .setColor('#0099FF')
-                    ],
-                    components: message.components
-                });
+                    // Delete the message from the ticketsOpened channel.
+                    if (ticketOpenedMessage) {
+                        await ticketOpenedMessage.delete();
+                    }
+                    break;
+                case 'locked':
+                    client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + newThread.id + " to locked.");
 
-                data.openedMessageId = ticketOpenedMessage.id;
-                client.botData.set(`ticket_${newThread.id}`, data);
+                    // Update the notification message to include the reason for closing the ticket
+                    embed.fields = embed.fields.filter(field => !field.name.includes('Closed') && !field.name.includes('Locked'));
+                    embed.fields.push({
+                        name: `Locked`,
+                        value: `<t:${Math.floor(Date.now() / 1000)}:R>\nReason: ${newThread.archivedReason || 'No reason.'}`
+                    });
+                    
+                    await message.edit({
+                        embeds: [
+                            EmbedBuilder.from(embed)
+                                .setTitle("Ticket Locked: `" + newThread.id + "`")
+                                .setColor('#a01a1a')
+                        ]
+                    });
 
-                break;
+                    // Delete the message from the ticketsOpened channel.
+                    if (ticketOpenedMessage) {
+                        await ticketOpenedMessage.delete();
+                    }
+                    break;
+                case 're-opened':
+                    client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + newThread.id + " to re-opened.");
+
+                    // Delete the previous possible action fields
+                    embed.fields = embed.fields.filter(field => !field.name.includes('Closed') && !field.name.includes('Locked'));
+
+                    await message.edit({
+                        embeds: [
+                            EmbedBuilder.from(embed)
+                                .setTitle("Ticket Re-opened: `" + newThread.id + "`")
+                                .setColor('#0099FF')
+                        ]
+                    });
+
+                    // Send a copy of the message to the ticketsOpened channel.
+                    ticketOpenedMessage = await ticketsOpenedNotifyChannel.send({
+                        content: '',
+                        embeds: [
+                            EmbedBuilder.from(embed)
+                                .setTitle("Ticket Re-opened: `" + newThread.id + "`")
+                                .setColor('#0099FF')
+                        ],
+                        components: message.components
+                    });
+
+                    data.openedMessageId = ticketOpenedMessage.id;
+                    client.botData.set(`ticket_${newThread.id}`, data);
+
+                    break;
             }
         }
         else // Legacy threads support. I will remove this at some point when old threads are all closed.
