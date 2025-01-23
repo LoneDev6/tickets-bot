@@ -609,24 +609,14 @@ client.on('interactionCreate', async (interaction) => {
 
 // On thread closed or locked or reopened
 client.on('threadUpdate', async (oldThread, newThread) => {
+    client.logger.info(`Thread updated: ${newThread.id} - ${newThread.name} - status ~ locked: ${newThread.locked}, archived: ${newThread.archived}`);
+
     let status = null;
-    if(newThread.locked !== oldThread.locked) {
+    if(newThread.locked !== oldThread.locked || newThread.archived !== oldThread.archived) {
         if(newThread.locked === true) {
             status = 'locked';
         } else {
-            status = 're-opened';
-        }
-    }
-
-    if(newThread.archived !== oldThread.archived) {
-        if(newThread.archived === true) {
-            status = 'closed';
-        } else {
-            if(newThread.locked === false) {
-                status = 're-opened';
-            } else {
-                status = 'locked';
-            }
+            status = newThread.archived ? 'closed' : 're-opened';
         }
     }
 
