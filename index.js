@@ -60,6 +60,74 @@ process.on('uncaughtException', error => {
 client.login(settings.DISCORD_TOKEN);
 
 client.on('messageCreate', async message => {
+
+    // Check if is a thread in the ticket category
+    // Get data from the botData
+    if (message.channel.parentId === config.channels.tickets) {
+        const data = client.botData.get(`ticket_${message.channelId}`);
+        // Might be a legacy ticket, ignore
+        if(!data) {
+            return;
+        }
+
+        // Update the messages with id `notificationMessageId` and id `openedMessageId` by adding info about who is the last user who sent a message.
+        const notificationChannel = message.guild.channels.cache.get(config.channels.ticketsNotifications);
+        if(!notificationChannel) {
+            client.logger.error(`Failed to update the tickets notification channel. The channel ${config.channels.ticketsNotifications} does not exist.`);
+            return;
+        }
+
+        const ticketsOpenedNotifyChannel = message.guild.channels.cache.get(config.channels.ticketsOpened);
+        if(!ticketsOpenedNotifyChannel) {
+            client.logger.error(`Failed to update the tickets opened notification channel. The channel ${config.channels.ticketsOpened} does not exist.`);
+            return;
+        }
+
+        try
+        {
+            const notificationMessage = await notificationChannel.messages.fetch(data.notificationMessageId);
+            // Check if the embed has fields, check if the field text contains "Last Message By" and update it.
+            if(notificationMessage.embeds[0].fields) {
+                const lastMessageByField = notificationMessage.embeds[0].fields.find(field => field.name === 'Last Message By');
+                if(lastMessageByField) {
+                    const lastMessageBy = message.author.id === client.user.id ? 'Bot' : `<@${message.author.id}>`;
+                    lastMessageByField.value = lastMessageBy;
+                    lastMessageByField.inline = true;
+                } else {
+                    notificationMessage.embeds[0].fields.push({
+                        name: 'Last Message By',
+                        value: message.author.id === client.user.id
+                            ? 'Bot'
+                            : `<@${message.author.id}>`,
+                            inline: true
+                    });
+                }
+
+                // Find also "Last Message When" and update it.
+                const lastMessageWhenField = notificationMessage.embeds[0].fields.find(field => field.name === 'Last Message When');
+                if(lastMessageWhenField) {
+                    lastMessageWhenField.value = '<t:' + Math.floor(Date.now() / 1000) + ':R>';
+                    lastMessageWhenField.inline = true;
+                } else {
+                    notificationMessage.embeds[0].fields.push({
+                        name: 'Last Message When',
+                        value: '<t:' + Math.floor(Date.now() / 1000) + ':R>',
+                        inline: true
+                    });
+                }
+
+                // Push the message update
+                await notificationMessage.edit({
+                    embeds: [notificationMessage.embeds[0]]
+                });
+            }
+        }
+        catch(error)
+        {
+            client.logger.error(`Failed to update the tickets notification channel. The message ${data.notificationMessageId} does not exist.`);
+        }
+    }
+
     if (message.author.bot)
         return
 
