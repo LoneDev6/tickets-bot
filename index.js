@@ -64,6 +64,7 @@ client.on('messageCreate', async message => {
     // Check if is a thread in the ticket category
     // Get data from the botData
     if (message.channel.parentId === config.channels.tickets) {
+        const thread = message.channel;
         const data = client.botData.get(`ticket_${message.channelId}`);
         // Might be a legacy ticket, ignore
         if(!data) {
@@ -86,39 +87,61 @@ client.on('messageCreate', async message => {
         try
         {
             const notificationMessage = await notificationChannel.messages.fetch(data.notificationMessageId);
+            const embeds = notificationMessage.embeds;
             // Check if the embed has fields, check if the field text contains "Last Message By" and update it.
-            if(notificationMessage.embeds[0].fields) {
-                const lastMessageByField = notificationMessage.embeds[0].fields.find(field => field.name === 'Last Message By');
+            if(embeds[0].fields) {
+                const lastMessageByField = embeds[0].fields.find(field => field.name === 'Last Message By');
                 if(lastMessageByField) {
-                    const lastMessageBy = message.author.id === client.user.id ? 'Bot' : `<@${message.author.id}>`;
+                    const lastMessageBy = `<@${message.author.id}>`;
                     lastMessageByField.value = lastMessageBy;
                     lastMessageByField.inline = true;
                 } else {
-                    notificationMessage.embeds[0].fields.push({
+                    embeds[0].fields.push({
                         name: 'Last Message By',
-                        value: message.author.id === client.user.id
-                            ? 'Bot'
-                            : `<@${message.author.id}>`,
-                            inline: true
+                        value: `<@${message.author.id}>`,
+                        inline: true
                     });
                 }
 
                 // Find also "Last Message When" and update it.
-                const lastMessageWhenField = notificationMessage.embeds[0].fields.find(field => field.name === 'Last Message When');
+                const lastMessageWhenField = embeds[0].fields.find(field => field.name === 'Last Message When');
                 if(lastMessageWhenField) {
                     lastMessageWhenField.value = '<t:' + Math.floor(Date.now() / 1000) + ':R>';
                     lastMessageWhenField.inline = true;
                 } else {
-                    notificationMessage.embeds[0].fields.push({
+                    embeds[0].fields.push({
                         name: 'Last Message When',
                         value: '<t:' + Math.floor(Date.now() / 1000) + ':R>',
                         inline: true
                     });
                 }
 
+                // Remove legacy shit
+                for(const embed of embeds) {
+                    if(embed.title === 'Users In Ticket') {
+                        embeds.splice(embeds.indexOf(embed), 1);
+                        break;
+                    }
+                }
+
+                await thread.members.fetch();
+                const mentions = thread.members.cache.map(member => member.id !== client.user.id ? `<@${member.id}>` : "").filter(mention => mention !== "");
+                const description = mentions.join(', ');
+                const usersInTicket = embeds[0].fields.find(field => field.name === 'Users In Ticket');
+                if(usersInTicket) {
+                    usersInTicket.value = description;
+                    usersInTicket.inline = true;
+                } else {
+                    embeds[0].fields.push({
+                        name: 'Users In Ticket',
+                        value: description,
+                        inline: true
+                    });
+                }
+
                 // Push the message update
                 await notificationMessage.edit({
-                    embeds: [notificationMessage.embeds[0]]
+                    embeds: embeds
                 });
             }
 
@@ -751,7 +774,12 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                     client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + newThread.id + " to closed.");
 
                     // Update the notification message to include the reason for closing the ticket
-                    embed.fields = embed.fields.filter(field => !field.name.includes('Closed') && !field.name.includes('Locked'));
+                    for (let i = 0; i < embed.fields.length; i++) {
+                        if (embed.fields[i].name.includes('Closed') || embed.fields[i].name.includes('Locked')) {
+                            embed.fields.splice(i, 1);
+                            i--;
+                        }
+                    }
                     embed.fields.push({
                         name: `Closed`,
                         value: `<t:${Math.floor(Date.now() / 1000)}:R>\nReason: ${newThread.archivedReason || 'No reason.'}`
@@ -774,7 +802,12 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                     client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + newThread.id + " to locked.");
 
                     // Update the notification message to include the reason for closing the ticket
-                    embed.fields = embed.fields.filter(field => !field.name.includes('Closed') && !field.name.includes('Locked'));
+                    for (let i = 0; i < embed.fields.length; i++) {
+                        if (embed.fields[i].name.includes('Closed') || embed.fields[i].name.includes('Locked')) {
+                            embed.fields.splice(i, 1);
+                            i--;
+                        }
+                    }
                     embed.fields.push({
                         name: `Locked`,
                         value: `<t:${Math.floor(Date.now() / 1000)}:R>\nReason: ${newThread.archivedReason || 'No reason.'}`
@@ -797,7 +830,12 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                     client.logger.info("threadUpdate - Updating ticket in ticketsNotifications channel: " + newThread.id + " to re-opened.");
 
                     // Delete the previous possible action fields
-                    embed.fields = embed.fields.filter(field => !field.name.includes('Closed') && !field.name.includes('Locked'));
+                    for (let i = 0; i < embed.fields.length; i++) {
+                        if (embed.fields[i].name.includes('Closed') || embed.fields[i].name.includes('Locked')) {
+                            embed.fields.splice(i, 1);
+                            i--;
+                        }
+                    }
 
                     await message.edit({
                         embeds: [
