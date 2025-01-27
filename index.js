@@ -717,13 +717,12 @@ async function handleThreadUpdate(newThread, status) {
         client.logger.error(`threadUpdate - Failed to update the tickets notification channel ${newThread.id}. The message ${data.notificationMessageId} does not exist.`);
         return;
     }
+
     let ticketOpenedMessage;
     try {
         ticketOpenedMessage = await ticketsOpenedNotifyChannel.messages.fetch(data.openedMessageId, { cache: false, force: true });
     }
-    catch(error) {
-        client.logger.error(`threadUpdate - Failed to update the tickets opened notification channel ${newThread.id}. The message ${data.openedMessageId} does not exist.`);
-    }
+    catch(error) {} // Might not exist.
 
     const embed = message.embeds[0];
     switch (status) {
