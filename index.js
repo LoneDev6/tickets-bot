@@ -709,6 +709,7 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 async function handleThreadUpdate(newThread, status) {
+    client.logger.info(`threadUpdate - handleThreadUpdate(): ${newThread.id} - ${newThread.name}`);
     // Get the message id from the botData
     const data = getData(newThread);
     const message = await notificationChannel.messages.fetch(data.notificationMessageId, { cache: false, force: true });
@@ -825,8 +826,6 @@ client.on('threadUpdate', async (oldThread, newThread) => {
         return;
     }
 
-    client.logger.info(`threadUpdate - Thread updated: ${newThread.id} - ${newThread.name} - status ~ locked: ${oldThread.locked}->${newThread.locked}, archived: ${oldThread.archived}->${newThread.archived}`);
-
     let status = null;
     if(newThread.locked !== oldThread.locked || newThread.archived !== oldThread.archived) {
         if(newThread.locked === true) {
@@ -837,6 +836,8 @@ client.on('threadUpdate', async (oldThread, newThread) => {
     } else {
         return;
     }
+
+    client.logger.info(`threadUpdate - Thread updated: ${newThread.id} - ${newThread.name} - status ~ locked: ${oldThread.locked}->${newThread.locked}, archived: ${oldThread.archived}->${newThread.archived}`);
 
     if (status) {
         if(client.botData.has(`ticket_${newThread.id}`))
