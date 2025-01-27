@@ -133,7 +133,7 @@ function updateLastMessageSent() {
             return;
         }
 
-        client.logger.info(`updateLastMessageSent - Updating ticket ${thread.id}.`);
+        client.logger.info(`updateLastMessageSent - Updating ticket ${thread.id} - ${thread.name}.`);
 
         const notificationMessage = await notificationChannel.messages.fetch(data.notificationMessageId, { cache: false, force: true });
         const embeds = notificationMessage.embeds;
