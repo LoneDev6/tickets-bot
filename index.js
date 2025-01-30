@@ -214,6 +214,26 @@ function updateLastMessageSent() {
                 });
             }
 
+            // Update the thread notification message to include the new user in the list of users who already joined the thread.
+            // Add a new embed to list the current users if not available or edit it by attaching that new embed to the ones.
+            // NOTE: also add interaction.user.id to the list of users.
+            // Force thread members to be fetched to avoid caching issues.
+            await thread.members.fetch();
+            const mentions = thread.members.cache
+                .filter(member => !member.user.bot && member.id !== data.userId)
+                .map(member => `<@${member.id}>`);
+            const description = mentions.join(', ');
+            if(embeds.length === 1) {
+                embeds.push(new EmbedBuilder()
+                    .setTitle('Users In Ticket')
+                    .setDescription(description)
+                );
+            } else {
+                embeds[1] = new EmbedBuilder()
+                    .setTitle('Users In Ticket')
+                    .setDescription(description);
+            }
+
             client.logger.info(`updateLastMessageSent - Updated ticket ${thread.id} - ${thread.name}, last message by <@${lastMessage.author.id}>, at ${new Date(lastMessage.createdTimestamp).toISOString()}, content: ${partialContent}.`);
 
             // Apply the changes to the notification message
@@ -723,27 +743,6 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             await thread.members.add(interaction.user.id);
-
-            // Update the thread notification message to include the new user in the list of users who already joined the thread.
-            // Add a new embed to list the current users if not available or edit it by attaching that new embed to the ones.
-            // NOTE: also add interaction.user.id to the list of users.
-            // Force thread members to be fetched to avoid caching issues.
-            await thread.members.fetch();
-            const mentions = thread.members.cache
-                .map(member => member.id !== client.user.id ? `<@${member.id}>` : "")
-                .filter(mention => mention !== "");
-            const description = mentions.join(', ');
-            const embeds = interaction.message.embeds;
-            if(embeds.length === 1) {
-                embeds.push(new EmbedBuilder()
-                    .setTitle('Users In Ticket')
-                    .setDescription(description)
-                );
-            } else {
-                embeds[1] = new EmbedBuilder()
-                    .setTitle('Users In Ticket')
-                    .setDescription(description);
-            }
 
             await interaction.message.edit({ embeds: embeds });
 
