@@ -96,8 +96,8 @@ client.on('ready', () => {
         process.exit(1);
     }
 
-    // Iterate all messages in the tickets notification channel and update the last message sent by the user, each 30 seconds.
-    setInterval(updateLastMessageSent, 30 * 1000);
+    // Iterate all messages in the tickets notification channel and update the last message sent by the user, each 60 seconds.
+    setInterval(updateLastMessageSent, 60 * 1000);
     updateLastMessageSent();
 });
 
@@ -139,15 +139,25 @@ function updateLastMessageSent() {
         const embeds = notificationMessage.embeds;
         // Check if the embed has fields, check if the field text contains "Last Message By" and update it.
         if(embeds[0].fields) {
+
+            client.logger.info(`updateLastMessageSent - Checking embeds ${thread.id} - ${thread.name}.`);
+
+            // Find the last message in the thread.
+            const messages = await thread.messages.fetch({ limit: 1 });
+            const lastMessage = messages.first();
+            if(!lastMessage) {
+                console.logger.error(`updateLastMessageSent - No last message found in the thread ${thread.id} - ${thread.name}.`);
+                return;
+            }
+
             const lastMessageByField = embeds[0].fields.find(field => field.name === 'Last Message By');
             if(lastMessageByField) {
-                const lastMessageBy = `<@${data.userId}>`;
-                lastMessageByField.value = lastMessageBy;
+                lastMessageByField.value = `<@${lastMessage.author.id}>`;
                 lastMessageByField.inline = true;
             } else {
                 embeds[0].fields.push({
                     name: 'Last Message By',
-                    value: `<@${data.userId}>`,
+                    value: `<@${lastMessage.author.id}>`,
                     inline: true
                 });
             }
@@ -155,20 +165,29 @@ function updateLastMessageSent() {
             // Find also "Last Message When" and update it.
             const lastMessageWhenField = embeds[0].fields.find(field => field.name === 'Last Message When');
             if(lastMessageWhenField) {
-                // Check if same data is already in the field, if not update it.
-                if(lastMessageWhenField.value === '<t:' + Math.floor(Date.now() / 1000) + ':R>') {
-                    return;
-                }
-
-                lastMessageWhenField.value = '<t:' + Math.floor(Date.now() / 1000) + ':R>';
+                lastMessageWhenField.value = '<t:' + Math.floor(lastMessage.createdTimestamp / 1000) + ':R>';
                 lastMessageWhenField.inline = true;
             } else {
                 embeds[0].fields.push({
                     name: 'Last Message When',
-                    value: '<t:' + Math.floor(Date.now() / 1000) + ':R>',
+                    value: '<t:' + Math.floor(lastMessage.createdTimestamp / 1000) + ':R>',
                     inline: true
                 });
             }
+
+            // Find also "Last Message Content" and update it.
+            const lastMessageContentField = embeds[0].fields.find(field => field.name === 'Last Message Content');
+            const partialContent = lastMessage.content.length > 128 ? lastMessage.content.substring(0, 128) + '...' : lastMessage.content;
+            if(lastMessageContentField) {
+                lastMessageContentField.value = partialContent;
+            } else {
+                embeds[0].fields.push({
+                    name: 'Last Message Content',
+                    value: partialContent
+                });
+            }
+
+            client.logger.info(`updateLastMessageSent - Updated ticket ${thread.id} - ${thread.name}, last message by <@${lastMessage.author.id}>, at ${new Date(lastMessage.createdTimestamp).toISOString()}, content: ${partialContent}.`);
 
             // Apply the changes to the notification message
             await notificationMessage.edit({
