@@ -119,6 +119,7 @@ client.on('ready', () => {
     .setName('lock')
     .setDescription('Lock the thread.')
     .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
+        { name: 'Solved. No further messages are expected.', value: 'Solved. No further messages are expected.' },
         { name: 'Invalid Section', value: 'Invalid section.' },
         { name: 'No information provided', value: 'No information provided.' },
         { name: 'Duplicate', value: 'Duplicate' },
