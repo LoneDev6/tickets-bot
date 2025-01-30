@@ -223,6 +223,9 @@ function updateLastMessageSent() {
                 .filter(member => !member.user.bot && member.id !== data.userId)
                 .map(member => `<@${member.id}>`);
             const description = mentions.join(', ');
+            if(description.length === 0) {
+                description = 'None.';
+            }
             if(embeds.length === 1) {
                 embeds.push(new EmbedBuilder()
                     .setTitle('Users In Ticket')
