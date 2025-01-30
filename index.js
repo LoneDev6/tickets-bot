@@ -108,6 +108,31 @@ client.on('ready', () => {
         console.log('Registered /invalid command successfully!');
     });
 
+    await guild.commands.create(new SlashCommandBuilder()
+    .setName('close')
+    .setDescription('Close the thread.')
+    .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
+        { name: 'Solved', value: 'Solved' },
+        { name: 'Inactivity', value: 'Inactivity' },
+    ).setDescription('Reason for closing the thread.'))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+
+    await guild.commands.create(new SlashCommandBuilder()
+    .setName('lock')
+    .setDescription('Lock the thread.')
+    .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
+        { name: 'Invalid Section', value: 'Invalid section.' },
+        { name: 'No information provided', value: 'No information provided.' },
+        { name: 'Duplicate', value: 'Duplicate' },
+        { name: 'Spam', value: 'Spam' },
+        { name: 'Inappropriate', value: 'Inappropriate' },
+    ).setDescription('Reason for closing the thread.'))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+
+    console.log('Registered /invalid command successfully!');
+});
+
+
     const guild = client.guilds.cache.get(config.guild);
 
     // Update the messages with id `notificationMessageId` and id `openedMessageId` by adding info about who is the last user who sent a message.
@@ -391,6 +416,66 @@ client.on('interactionCreate', async (interaction) => {
                 embeds: [new EmbedBuilder()
                     .setColor('#0099FF')
                     .setTitle('Invalid Thread Locked')
+                    .setDescription(`This thread has been locked by <@${interaction.user.id}>.\nReason: ${reason || 'No reason.'}`)
+                ]
+            });
+        } else if (interaction.commandName === 'close') {
+            const thread = interaction.channel;
+            if (!thread) {
+                return await interaction.reply({
+                    content: 'The command can only be used in a thread.',
+                    ephemeral: true
+                });
+            }
+
+            await interaction.deferReply();
+
+            const reason = interaction.options.getString('reason');
+            if(reason) {
+                const data = client.botData.get(`ticket_${thread.id}`);
+                if(data) { // else legacy ticket.
+                    data.closedLockedReason = reason;
+                    client.botData.set(`ticket_${thread.id}`, data);
+                }
+            }
+            if(!thread.archived) {
+                await thread.setArchived(true, reason ? reason : 'No reason.');
+            }
+
+            return await interaction.editReply({
+                embeds: [new EmbedBuilder()
+                    .setColor('#0099FF')
+                    .setTitle('Ticket Closed')
+                    .setDescription(`This thread has been closed by <@${interaction.user.id}>.\nReason: ${reason || 'No reason.'}`)
+                ]
+            });
+        } else if (interaction.commandName === 'lock') {
+            const thread = interaction.channel;
+            if (!thread) {
+                return await interaction.reply({
+                    content: 'The command can only be used in a thread.',
+                    ephemeral: true
+                });
+            }
+
+            await interaction.deferReply();
+
+            const reason = interaction.options.getString('reason');
+            if(reason) {
+                const data = client.botData.get(`ticket_${thread.id}`);
+                if(data) { // else legacy ticket.
+                    data.closedLockedReason = reason;
+                    client.botData.set(`ticket_${thread.id}`, data);
+                }
+            }
+            if(!thread.locked) {
+                await thread.setLocked(true, reason ? reason : 'No reason.');
+            }
+
+            return await interaction.editReply({
+                embeds: [new EmbedBuilder()
+                    .setColor('#0099FF')
+                    .setTitle('Ticket Locked')
                     .setDescription(`This thread has been locked by <@${interaction.user.id}>.\nReason: ${reason || 'No reason.'}`)
                 ]
             });
