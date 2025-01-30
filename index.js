@@ -203,7 +203,7 @@ function updateLastMessageSent() {
                 });
             } 
             catch(error) {
-                client.logger.error(`updateLastMessageSent - Failed to update the tickets opened notification channel ${thread.id}. The message ${data.openedMessageId} does not exist.`);
+                client.logger.error(`updateLastMessageSent - Failed to update the tickets opened notification channel ${thread.id} - ${thread.name}. The message ${data.openedMessageId} does not exist.`);
             }
         }
     });
