@@ -93,47 +93,42 @@ client.on('ready', () => {
     // There is no need to iterate with that much frequency. It's just for threads that for some reason didn't generate the `threadUpdate` or `threadDelete` events.
     setInterval(forceUpdateTicketsNotificationChannel, 20 * 60 * 1000);
 
-    client.guilds.cache.forEach(async guild => {
-        await guild.commands.create(new SlashCommandBuilder()
-        .setName('rename')
-        .setDescription('Rename a thread, channel or forum post')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
-        console.log('Registered /rename command successfully!');
-
-        await guild.commands.create(new SlashCommandBuilder()
-            .setName('lockinvalid')
-            .setDescription('Lock the thread.')
-            .addStringOption(option => option.setName('reason').setRequired(false).setDescription('Reason for locking the thread.'))
-            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
-            console.log('Registered /invalid command successfully!');
-
-        await guild.commands.create(new SlashCommandBuilder()
-        .setName('close')
-        .setDescription('Close the thread.')
-        .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
-            { name: 'Solved', value: 'Solved' },
-            { name: 'Inactivity', value: 'Inactivity' },
-        ).setDescription('Reason for closing the thread.'))
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
-
-        await guild.commands.create(new SlashCommandBuilder()
-        .setName('lock')
-        .setDescription('Lock the thread.')
-        .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
-            { name: 'Invalid Section', value: 'Invalid section.' },
-            { name: 'No information provided', value: 'No information provided.' },
-            { name: 'Duplicate', value: 'Duplicate' },
-            { name: 'Spam', value: 'Spam' },
-            { name: 'Inappropriate', value: 'Inappropriate' },
-        ).setDescription('Reason for closing the thread.'))
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
-    });
-
-    console.log('Registered /invalid command successfully!');
-});
-
-
     const guild = client.guilds.cache.get(config.guild);
+    guild.commands.create(new SlashCommandBuilder()
+    .setName('rename')
+    .setDescription('Rename a thread, channel or forum post')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+
+    guild.commands.create(new SlashCommandBuilder()
+        .setName('lockinvalid')
+        .setDescription('Lock the thread.')
+        .addStringOption(option => option.setName('reason').setRequired(false).setDescription('Reason for locking the thread.'))
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+        console.log('Registered /invalid command successfully!');
+
+    guild.commands.create(new SlashCommandBuilder()
+    .setName('close')
+    .setDescription('Close the thread.')
+    .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
+        { name: 'Solved', value: 'Solved' },
+        { name: 'Inactivity', value: 'Inactivity' },
+    ).setDescription('Reason for closing the thread.'))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+
+    guild.commands.create(new SlashCommandBuilder()
+    .setName('lock')
+    .setDescription('Lock the thread.')
+    .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
+        { name: 'Invalid Section', value: 'Invalid section.' },
+        { name: 'No information provided', value: 'No information provided.' },
+        { name: 'Duplicate', value: 'Duplicate' },
+        { name: 'Spam', value: 'Spam' },
+        { name: 'Inappropriate', value: 'Inappropriate' },
+    ).setDescription('Reason for closing the thread.'))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+
+    console.log('Registered commands successfully!');
+
 
     // Update the messages with id `notificationMessageId` and id `openedMessageId` by adding info about who is the last user who sent a message.
     notificationChannel = guild.channels.cache.get(config.channels.ticketsNotifications);
