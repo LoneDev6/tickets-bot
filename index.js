@@ -747,8 +747,6 @@ client.on('interactionCreate', async (interaction) => {
 
             await thread.members.add(interaction.user.id);
 
-            await interaction.message.edit({ embeds: embeds });
-
             return await interaction.reply({
                 content: 'You have successfully joined the ticket thread.',
                 ephemeral: true
