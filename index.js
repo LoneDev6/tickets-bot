@@ -403,17 +403,20 @@ client.on('interactionCreate', async (interaction) => {
                     client.botData.set(`ticket_${thread.id}`, data);
                 }
             }
-            if(!thread.locked) {
-                await thread.setLocked(true, reason ? reason : 'No reason.');
-            }
 
-            return await interaction.editReply({
+            await thread.send({
                 embeds: [new EmbedBuilder()
                     .setColor('#0099FF')
                     .setTitle('Invalid Thread Locked')
                     .setDescription(`This thread has been locked by <@${interaction.user.id}>.\nReason: ${reason || 'No reason.'}`)
                 ]
             });
+
+            if(!thread.locked) {
+                await thread.setLocked(true, reason ? reason : 'No reason.');
+            }
+
+            return await interaction.deleteReply();
         } else if (interaction.commandName === 'close') {
             const thread = interaction.channel;
             if (!thread) {
@@ -433,17 +436,20 @@ client.on('interactionCreate', async (interaction) => {
                     client.botData.set(`ticket_${thread.id}`, data);
                 }
             }
-            if(!thread.archived) {
-                await thread.setArchived(true, reason ? reason : 'No reason.');
-            }
 
-            return await interaction.editReply({
+            await thread.send({
                 embeds: [new EmbedBuilder()
                     .setColor('#0099FF')
                     .setTitle('Ticket Closed')
                     .setDescription(`This thread has been closed by <@${interaction.user.id}>.\nReason: ${reason || 'No reason.'}`)
                 ]
             });
+
+            if(!thread.archived) {
+                await thread.setArchived(true, reason ? reason : 'No reason.');
+            }
+
+            return await interaction.deleteReply();
         } else if (interaction.commandName === 'lock') {
             const thread = interaction.channel;
             if (!thread) {
@@ -463,17 +469,21 @@ client.on('interactionCreate', async (interaction) => {
                     client.botData.set(`ticket_${thread.id}`, data);
                 }
             }
-            if(!thread.locked) {
-                await thread.setLocked(true, reason ? reason : 'No reason.');
-            }
 
-            return await interaction.editReply({
+
+            await thread.send({
                 embeds: [new EmbedBuilder()
                     .setColor('#0099FF')
                     .setTitle('Ticket Locked')
                     .setDescription(`This thread has been locked by <@${interaction.user.id}>.\nReason: ${reason || 'No reason.'}`)
                 ]
             });
+            
+            if(!thread.locked) {
+                await thread.setLocked(true, reason ? reason : 'No reason.');
+            }
+
+            return await interaction.deleteReply();
         }
     }
 
@@ -960,6 +970,15 @@ client.on('threadUpdate', async (oldThread, newThread) => {
             status = newThread.archived ? 'closed' : 're-opened';
         }
     } else {
+        if(newThread.locked === true) {
+            status = 'locked';
+        } else {
+            if(newThread.archived === true) {
+                status = 'closed';
+            } else {
+                return;
+            }
+        }
         return;
     }
 
