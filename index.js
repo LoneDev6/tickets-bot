@@ -414,6 +414,7 @@ client.on('interactionCreate', async (interaction) => {
                 client.logger.info(`Ticket locked by @${interaction.member.user.tag} (${interaction.member.id}) in #${interaction.channel.name} (${interaction.channel.id}).`);
             } else {
                 client.logger.info(`Ticket closed by @${interaction.member.user.tag} (${interaction.member.id}) in #${interaction.channel.name} (${interaction.channel.id}).`);
+                await interaction.channel.setArchived(true, reason ? reason : 'No reason.');
             }
 
             client.botData.set(`ticket_${thread.id}`, data);
