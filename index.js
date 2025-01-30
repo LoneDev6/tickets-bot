@@ -222,7 +222,7 @@ function updateLastMessageSent() {
             const mentions = thread.members.cache
                 .filter(member => !member.user.bot && member.id !== data.userId)
                 .map(member => `<@${member.id}>`);
-            const description = mentions.join(', ');
+            let description = mentions.join(', ');
             if(description.length === 0) {
                 description = 'None.';
             }
