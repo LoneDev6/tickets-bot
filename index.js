@@ -5,6 +5,33 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ThreadAutoAr
 const { settings, config } = require('./global.js');
 const Enmap = require("enmap");
 
+process.stdin.resume();
+process.stdin.setEncoding('utf8');
+
+process.stdin.on('data', function (text) {
+  console.log(`Received console input: ${text}`);
+
+  // Check if command equals to set-open-notify-message-id <threadId> <messageId>
+  if(text.startsWith('set-open-notify-message-id')) {
+    const args = text.split(' ');
+    if(args.length === 3) {
+        const threadId = args[1];
+        const messageId = args[2];
+        // Check if threadId and messageId are valid Discord IDs
+        if(threadId.match(/^\d+$/) && messageId.match(/^\d+$/)) {
+            const data = client.botData.get(`ticket_${threadId}`);
+            if(data) {
+                data.openedMessageId = messageId;
+                client.botData.set(`ticket_${threadId}`, data);
+                client.logger.info(`Console - Updated the opened message id for the thread ${threadId} to ${messageId}.`);
+            } else {
+                client.logger.info(`Console - The thread ${threadId} does not exist.`);
+            }
+        }
+    }
+  }
+});
+
 const client = new discord.Client({
     closeTimeout: 3_000 ,
     waitGuildTimeout: 15_000,
