@@ -87,59 +87,60 @@ client.on('disconnect', () => {
     console.log(`Disconnecting as ${client.user.tag}!`);
 });
 
-client.on('ready', () => {
+client.on('ready', async () => {
     console.log(`Logged in as ${client.user.tag}!`);
     
     // There is no need to iterate with that much frequency. It's just for threads that for some reason didn't generate the `threadUpdate` or `threadDelete` events.
     setInterval(forceUpdateTicketsNotificationChannel, 20 * 60 * 1000);
 
     const guild = client.guilds.cache.get(config.guild);
-    guild.commands.create(new SlashCommandBuilder()
-    .setName('rename')
-    .setDescription('Rename a thread, channel or forum post')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+
+    try {
+        await guild.commands.set([]);
+        console.log(`✅ All previous commands deleted`);
+    } catch (error) {
+        console.error("❌ Failed to delete previous commands.", error);
+    }
 
     guild.commands.create(new SlashCommandBuilder()
-        .setName('lockinvalid')
-        .setDescription('Lock the thread.')
-        .addStringOption(option => option.setName('reason').setRequired(false).setDescription('Reason for locking the thread.'))
+        .setName('rename')
+        .setDescription('Rename a thread, channel or forum post')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
-        console.log('Registered /invalid command successfully!');
 
     guild.commands.create(new SlashCommandBuilder()
-    .setName('close')
-    .setDescription('Close the thread.')
-    .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
-        { name: 'Solved', value: 'Solved' },
-        { name: 'Inactivity', value: 'Inactivity' },
-    ).setDescription('Reason for closing the thread.'))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+        .setName('close')
+        .setDescription('Close the thread.')
+        .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
+            { name: 'Solved', value: 'Solved' },
+            { name: 'Inactivity', value: 'Inactivity' },
+        ).setDescription('Reason for closing the thread.'))
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
 
     guild.commands.create(new SlashCommandBuilder()
-    .setName('lock')
-    .setDescription('Lock the thread.')
-    .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
-        { name: 'Solved. No further messages are expected.', value: 'Solved. No further messages are expected.' },
-        { name: 'Invalid Section', value: 'Invalid section.' },
-        { name: 'No information provided', value: 'No information provided.' },
-        { name: 'Duplicate', value: 'Duplicate' },
-        { name: 'Spam', value: 'Spam' },
-        { name: 'Inappropriate', value: 'Inappropriate' },
-    ).setDescription('Reason for closing the thread.'))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+        .setName('lock')
+        .setDescription('Lock the thread.')
+        .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
+            { name: 'Solved. No further messages are expected.', value: 'Solved. No further messages are expected.' },
+            { name: 'Invalid Section', value: 'Invalid section.' },
+            { name: 'No information provided', value: 'No information provided.' },
+            { name: 'Duplicate', value: 'Duplicate' },
+            { name: 'Spam', value: 'Spam' },
+            { name: 'Inappropriate', value: 'Inappropriate' },
+        ).setDescription('Reason for closing the thread.'))
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
 
-    console.log('Registered commands successfully!');
+    console.log('✅ Registered commands successfully!');
 
 
     // Update the messages with id `notificationMessageId` and id `openedMessageId` by adding info about who is the last user who sent a message.
     notificationChannel = guild.channels.cache.get(config.channels.ticketsNotifications);
-    if(!notificationChannel) {
+    if (!notificationChannel) {
         client.logger.error(`onReady - Failed to read the tickets notification channel. The channel ${config.channels.ticketsNotifications} does not exist.`);
         process.exit(1);
     }
 
     ticketsOpenedNotifyChannel = guild.channels.cache.get(config.channels.ticketsOpened);
-    if(!ticketsOpenedNotifyChannel) {
+    if (!ticketsOpenedNotifyChannel) {
         client.logger.error(`onReady - Failed to read the tickets opened notification channel. The channel ${config.channels.ticketsOpened} does not exist.`);
         process.exit(1);
     }
@@ -378,46 +379,6 @@ client.on('interactionCreate', async (interaction) => {
                 .setValue(interaction.channel.name)
             ));
             return await interaction.showModal(modal);
-        } else if (interaction.commandName === 'lockinvalid') {
-            const thread = interaction.channel;
-            if (!thread) {
-                return await interaction.reply({
-                    content: 'The command can only be used in a thread.',
-                    ephemeral: true
-                });
-            }
-
-            await interaction.deferReply();
-
-            // Check if it matches regex "Payment: username (0000000000000)"
-            if (thread.name.match(/^(.*): (.+) \((\d+)\)(| .*)$/)) {
-                // Replace the first matching group with "Invalid".
-                const newName = thread.name.replace(/^.*?: (.+ \(\d+\))$/, 'Invalid: $1');
-                await thread.setName(newName);
-            }
-
-            const reason = interaction.options.getString('reason');
-            if(reason) {
-                const data = client.botData.get(`ticket_${thread.id}`);
-                if(data) { // else legacy ticket.
-                    data.closedLockedReason = reason;
-                    client.botData.set(`ticket_${thread.id}`, data);
-                }
-            }
-
-            await thread.send({
-                embeds: [new EmbedBuilder()
-                    .setColor('#0099FF')
-                    .setTitle('Invalid Thread Locked')
-                    .setDescription(`This thread has been locked by <@${interaction.user.id}>.\nReason: ${reason || 'No reason.'}`)
-                ]
-            });
-
-            if(!thread.locked) {
-                await thread.setLocked(true, reason ? reason : 'No reason.');
-            }
-
-            return await interaction.deleteReply();
         } else if (interaction.commandName === 'close') {
             const thread = interaction.channel;
             if (!thread) {
@@ -470,7 +431,6 @@ client.on('interactionCreate', async (interaction) => {
                     client.botData.set(`ticket_${thread.id}`, data);
                 }
             }
-
 
             await thread.send({
                 embeds: [new EmbedBuilder()
@@ -555,12 +515,14 @@ client.on('interactionCreate', async (interaction) => {
                 }
             }
 
+            const actionStr = interaction.customId === 'modal_ticket_panel_lock_thread' ? 'locked' : 'closed';
+
             // Send a message to the user in the thread
             await interaction.channel.send({
                 embeds: [new EmbedBuilder()
                     .setColor('#0099FF')
-                    .setTitle('Ticket Closed')
-                    .setDescription(`This ticket has been closed by <@${interaction.member.id}>.\nReason: ${reason}`)
+                    .setTitle(`Ticket ${capitalize(actionStr)}`)
+                    .setDescription(`This ticket has been ${actionStr} by <@${interaction.member.id}>.\nReason: ${reason}`)
                 ],
                 components: [ new ActionRowBuilder().addComponents(new ButtonBuilder()
                     .setLabel('Re-open')
@@ -569,13 +531,13 @@ client.on('interactionCreate', async (interaction) => {
                 ]
             });
 
-            if(interaction.customId === 'modal_ticket_panel_lock_thread') {
+            if(actionStr === 'locked') {
                 await interaction.channel.setLocked(true, reason ? reason : 'No reason.');
-                client.logger.info(`Ticket locked by @${interaction.member.user.tag} (${interaction.member.id}) in #${interaction.channel.name} (${interaction.channel.id}).`);
-            } else {
-                client.logger.info(`Ticket closed by @${interaction.member.user.tag} (${interaction.member.id}) in #${interaction.channel.name} (${interaction.channel.id}).`);
+            } else if(actionStr === 'closed') {
                 await interaction.channel.setArchived(true, reason ? reason : 'No reason.');
             }
+
+            client.logger.info(`Ticket ${actionStr} by @${interaction.member.user.tag} (${interaction.member.id}) in #${interaction.channel.name} (${interaction.channel.id}).`);
 
             client.botData.set(`ticket_${thread.id}`, data);
             return await interaction.deferUpdate();
@@ -1356,4 +1318,8 @@ async function forceUpdateTicketsNotificationChannel() {
         // Wait a bit before the next batch to avoid rate limits
         await new Promise(resolve => setTimeout(resolve, 2000));
     }
+}
+
+function capitalize(string){
+    return string[0].toUpperCase() + string.slice(1).toLowerCase();
 }
