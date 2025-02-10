@@ -1,3 +1,6 @@
+const UPDATE_LAST_MESSAGE_SENT_INTERVAL = 1000 * 60 * 5;
+const FORCE_UPDATE_TICKETS_NOTIFICATION_CHANNEL_INTERVAL = 1000 * 60 * 60; // There is no need to iterate with that much frequency. It's just for threads that for some reason didn't generate the `threadUpdate` or `threadDelete` events.
+
 require('dotenv').config()
 require('./server.js');
 const discord = require('discord.js');
@@ -91,7 +94,7 @@ client.on('ready', async () => {
     console.log(`Logged in as ${client.user.tag}!`);
     
     // There is no need to iterate with that much frequency. It's just for threads that for some reason didn't generate the `threadUpdate` or `threadDelete` events.
-    setInterval(forceUpdateTicketsNotificationChannel, 20 * 60 * 1000);
+    setInterval(forceUpdateTicketsNotificationChannel, FORCE_UPDATE_TICKETS_NOTIFICATION_CHANNEL_INTERVAL);
 
     const guild = client.guilds.cache.get(config.guild);
 
@@ -145,8 +148,8 @@ client.on('ready', async () => {
         process.exit(1);
     }
 
-    // Iterate all messages in the tickets notification channel and update the last message sent by the user, each 60 seconds.
-    setInterval(updateLastMessageSent, 60 * 1000);
+    // Iterate all messages in the tickets notification channel and update the last message sent by the user.
+    setInterval(updateLastMessageSent, UPDATE_LAST_MESSAGE_SENT_INTERVAL);
     updateLastMessageSent();
 });
 
@@ -184,12 +187,26 @@ function updateLastMessageSent() {
 
         client.logger.info(`updateLastMessageSent - Updating ticket ${thread.id} - ${thread.name}.`);
 
-        const notificationMessage = await notificationChannel.messages.fetch(data.notificationMessageId, { cache: false, force: true });
+        // Wait a bit to avoid rate limits.
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        let notificationMessage;
+        try
+        {
+            notificationMessage = await notificationChannel.messages.fetch(data.notificationMessageId, { cache: false, force: true });
+        }
+        catch(error) {
+            client.logger.error(`updateLastMessageSent - Failed to update the ticket ${thread.id} - ${thread.name}. The message ${data.notificationMessageId} does not exist.`);
+            return;
+        }
         const embeds = notificationMessage.embeds;
         // Check if the embed has fields, check if the field text contains "Last Message By" and update it.
         if(embeds[0].fields) {
 
             client.logger.info(`updateLastMessageSent - Checking embeds ${thread.id} - ${thread.name}.`);
+
+             // Wait a bit to avoid rate limits.
+            await new Promise(resolve => setTimeout(resolve, 1000));
 
             // Find the last message in the thread.
             const messages = await thread.messages.fetch({ limit: 1 });
