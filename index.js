@@ -416,7 +416,7 @@ client.on('interactionCreate', async (interaction) => {
                 }
             }
 
-            await thread.send({
+            await interaction.followUp({
                 embeds: [new EmbedBuilder()
                     .setColor('#0099FF')
                     .setTitle('Ticket Closed')
@@ -428,7 +428,7 @@ client.on('interactionCreate', async (interaction) => {
                 await thread.setArchived(true, reason ? reason : 'No reason.');
             }
 
-            return await interaction.deleteReply();
+            return;
         } else if (interaction.commandName === 'lock') {
             const thread = interaction.channel;
             if (!thread) {
@@ -449,7 +449,7 @@ client.on('interactionCreate', async (interaction) => {
                 }
             }
 
-            await thread.send({
+            await interaction.followUp({
                 embeds: [new EmbedBuilder()
                     .setColor('#0099FF')
                     .setTitle('Ticket Locked')
@@ -461,7 +461,7 @@ client.on('interactionCreate', async (interaction) => {
                 await thread.setLocked(true, reason ? reason : 'No reason.');
             }
 
-            return await interaction.deleteReply();
+            return;
         }
     }
 
@@ -841,6 +841,9 @@ async function handleThreadUpdate(newThread, status) {
     }
     catch(error) {} // Might not exist.
 
+    // Wait before editing the thread message to avoid rate limits.
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
     const embed = message.embeds[0];
     switch (status) {
         case 'closed':
@@ -868,6 +871,8 @@ async function handleThreadUpdate(newThread, status) {
 
             // Delete the message from the ticketsOpened channel.
             if (ticketOpenedMessage) {
+                // Wait before editing the thread message to avoid rate limits.
+                await new Promise(resolve => setTimeout(resolve, 1000));
                 await ticketOpenedMessage.delete();
             }
             break;
@@ -896,6 +901,8 @@ async function handleThreadUpdate(newThread, status) {
 
             // Delete the message from the ticketsOpened channel.
             if (ticketOpenedMessage) {
+                // Wait before editing the thread message to avoid rate limits.
+                await new Promise(resolve => setTimeout(resolve, 1000));
                 await ticketOpenedMessage.delete();
             }
             break;
@@ -920,8 +927,13 @@ async function handleThreadUpdate(newThread, status) {
 
             // Delete the message from the ticketsOpened channel.
             if (ticketOpenedMessage) {
+                // Wait before editing the thread message to avoid rate limits.
+                await new Promise(resolve => setTimeout(resolve, 1000));
                 await ticketOpenedMessage.delete();
             }
+
+            // Wait before editing the thread message to avoid rate limits.
+            await new Promise(resolve => setTimeout(resolve, 1000));
 
             // Send a copy of the message to the ticketsOpened channel.
             ticketOpenedMessage = await ticketsOpenedNotifyChannel.send({
@@ -964,6 +976,8 @@ client.on('threadUpdate', async (oldThread, newThread) => {
 
     client.logger.info(`threadUpdate - Thread updated: ${newThread.id} - ${newThread.name} - status ~ locked: ${oldThread.locked}->${newThread.locked}, archived: ${oldThread.archived}->${newThread.archived}`);
 
+    const data = client.botData.get(`ticket_${newThread.id}`);
+
     if (status) {
         if(client.botData.has(`ticket_${newThread.id}`))
         {
@@ -1004,8 +1018,8 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                         continue;
                     }
 
-                    // Wait 1 second before editing the thread message to avoid rate limits.
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    // Wait before editing the thread message to avoid rate limits.
+                    await new Promise(resolve => setTimeout(resolve, 5000));
 
                     const embed = message.embeds[0];
                     switch(status) {
@@ -1039,6 +1053,9 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                             ]
                         });
 
+                        // Wait before editing the thread message to avoid rate limits.
+                        await new Promise(resolve => setTimeout(resolve, 5000));
+
                         // Send a copy of the message to the ticketsOpened channel.
                         await ticketsOpenedNotifyChannel.send({
                             content: '',
@@ -1068,7 +1085,7 @@ client.on('threadUpdate', async (oldThread, newThread) => {
                 await new Promise(resolve => setTimeout(resolve, 2000));
             }
 
-             // Check if the message is already in the ticketsOpened channel, by iterating message in the ticketsOpened channel.
+            // Check if the message is already in the ticketsOpened channel, by iterating message in the ticketsOpened channel.
             // If the status is closed, delete the message from the ticketsOpened channel.
             if(status === 'closed' || status === 'locked') {
                 lastMessageId = null;
@@ -1140,7 +1157,7 @@ client.on('threadDelete', async thread => {
             embeds: [
                 EmbedBuilder.from(embed)
                 .setTitle("Ticket Deleted: `" + thread.id + "`")
-                .setColor('#33000e')
+                .setColor('#31000e')
             ]
         });
 
@@ -1187,7 +1204,7 @@ client.on('threadDelete', async thread => {
                     embeds: [
                         EmbedBuilder.from(embed)
                         .setTitle("Ticket Deleted: `" + thread.id + "`")
-                        .setColor('#33000e')
+                        .setColor('#31000e')
                     ]
                 });
 
@@ -1286,7 +1303,7 @@ async function forceUpdateTicketsNotificationChannel() {
                         embeds: [
                             EmbedBuilder.from(embed)
                             .setTitle("Ticket Deleted: `" + threadId + "`")
-                            .setColor('#33000e')
+                            .setColor('#31000e')
                         ]
                     });
                 }
