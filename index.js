@@ -69,6 +69,8 @@ client.botData = new Enmap({
 	cloneLevel: "deep"
 });
 
+client.cooldown = {};
+
 function editData(thread, editFunction) {
     const data = client.botData.get(`ticket_${thread.id}`);
     if(data) {
@@ -319,7 +321,12 @@ client.on('messageCreate', async message => {
                     .setCustomId('ticket_panel_create_thread_payment')
                     .setLabel('Payment Issue')
                     .setStyle(ButtonStyle.Primary)
-                    .setEmoji('💰')
+                    .setEmoji('💰'),
+                    new ButtonBuilder()
+                        .setCustomId('ticket_panel_my_tickets')
+                        .setLabel('My Tickets')
+                        .setStyle(ButtonStyle.Success)
+                        .setEmoji('🎟️')
             );
 
             const embed = new EmbedBuilder()
@@ -347,7 +354,7 @@ async function hasReachedMaxNumberOfThreads(interaction) {
     // Iterate through threads and check if the user already has max 1 opened thread in the recent 48 hours.
     let threadCount = 0;
     await interaction.channel.threads.cache.forEach(thread => {
-        if (thread.archived === false && thread.name.includes(interaction.user.id) && thread.createdTimestamp + 172800000 >= Date.now())
+        if (!thread.archived && !thread.locked && thread.name.includes(interaction.user.id) && thread.createdTimestamp + 172800000 >= Date.now())
             threadCount++;
     });
 
@@ -798,6 +805,53 @@ client.on('interactionCreate', async (interaction) => {
             ));
 
             return await interaction.showModal(modal);
+        }
+        else if(interaction.customId === 'ticket_panel_my_tickets') {
+
+            // Cooldown for the command.
+            if(client.cooldown && client.cooldown[interaction.user.id] && (Date.now() < client.cooldown[interaction.user.id] + 10000)) {
+                return await interaction.reply({
+                    content: `You cannot use this command for another ${Math.ceil((client.cooldown[interaction.user.id] + 10000 - Date.now()) / 1000)} seconds.`,
+                    ephemeral: true
+                });
+            }
+
+            client.cooldown[interaction.user.id] = Date.now();
+            
+            const threads = interaction.channel.threads.cache.filter(thread => thread.name.includes(interaction.user.id));
+            if(threads.size === 0) {
+                return await interaction.reply({
+                    content: 'You do not have any open threads.',
+                    ephemeral: true
+                });
+            }
+
+            const embeds = [];
+            for(const thread of threads.values()) {
+                const data = getData(thread);
+                if(!data) {
+                    continue;
+                }
+
+                let statusText = '🟢Open';
+                if(thread.locked) {
+                    statusText = 'Locked';
+                } else if(thread.archived) {
+                    statusText = 'Closed';
+                }
+
+                const embed = new EmbedBuilder()
+                    .setTitle(`Ticket: ${thread.name}`)
+                    .setDescription(`**Created:** <t:${Math.floor(thread.createdTimestamp / 1000)}:F> (<t:${Math.floor(thread.createdTimestamp / 1000)}:R>)\n**Status**: ${statusText}`)
+                    .setColor('#0099FF');
+
+                embeds.push(embed);
+            }
+
+            return await interaction.reply({
+                embeds: embeds,
+                ephemeral: true
+            });
         }
 
         if(interaction.customId.startsWith("ticket_panel_join_thread_")) {
