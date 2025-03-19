@@ -842,7 +842,7 @@ client.on('interactionCreate', async (interaction) => {
 
                 const embed = new EmbedBuilder()
                     .setTitle(`Ticket: ${thread.name}`)
-                    .setDescription(`**Created:** <t:${Math.floor(thread.createdTimestamp / 1000)}:F> (<t:${Math.floor(thread.createdTimestamp / 1000)}:R>)\n**Status**: ${statusText}`)
+                    .setDescription(`**Created:** <t:${Math.floor(thread.createdTimestamp / 1000)}:F> (<t:${Math.floor(thread.createdTimestamp / 1000)}:R>)\n**Status**: ${statusText}\n**Link**: https://discord.com/channels/${interaction.guild.id}/${thread.id}`)
                     .setColor('#0099FF');
 
                 embeds.push(embed);
