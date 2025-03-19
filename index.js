@@ -817,8 +817,13 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             client.cooldown[interaction.user.id] = Date.now();
+
+            // Might take some time to fetch the threads.
+            await interaction.deferUpdate();
             
-            const threads = interaction.channel.threads.cache.filter(thread => thread.name.includes(interaction.user.id));
+            const fetchedThreads = await interaction.channel.threads.fetchActive(false);
+            const archivedThreads = await interaction.channel.threads.fetchArchived(false);
+            const threads = fetchedThreads.threads.concat(archivedThreads.threads).filter(thread => thread.name.includes(interaction.user.id));
             if(threads.size === 0) {
                 return await interaction.reply({
                     content: 'You do not have any open threads.',
@@ -848,7 +853,7 @@ client.on('interactionCreate', async (interaction) => {
                 embeds.push(embed);
             }
 
-            return await interaction.reply({
+            return await interaction.followUp({
                 embeds: embeds,
                 ephemeral: true
             });
