@@ -818,7 +818,9 @@ client.on('interactionCreate', async (interaction) => {
 
             client.cooldown[interaction.user.id] = Date.now();
             
-            const threads = interaction.channel.threads.cache.filter(thread => thread.name.includes(interaction.user.id));
+            const fetchedThreads = await interaction.channel.threads.fetchActive();
+            const archivedThreads = await interaction.channel.threads.fetchArchived();
+            const threads = fetchedThreads.threads.concat(archivedThreads.threads).filter(thread => thread.name.includes(interaction.user.id));
             if(threads.size === 0) {
                 return await interaction.reply({
                     content: 'You do not have any open threads.',
