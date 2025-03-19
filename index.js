@@ -853,7 +853,7 @@ client.on('interactionCreate', async (interaction) => {
                 embeds.push(embed);
             }
 
-            return await interaction.reply({
+            return await interaction.followUp({
                 embeds: embeds,
                 ephemeral: true
             });
