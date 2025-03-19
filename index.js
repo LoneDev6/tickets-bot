@@ -827,26 +827,31 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             const embeds = [];
-            for(const thread of threads.values()) {
-                const data = getData(thread);
-                if(!data) {
-                    continue;
-                }
+            // for(const thread of threads.values()) {
+            //     const data = getData(thread);
+            //     if(!data) {
+            //         continue;
+            //     }
 
-                let statusText = '🟢Open';
-                if(thread.locked) {
-                    statusText = 'Locked';
-                } else if(thread.archived) {
-                    statusText = 'Closed';
-                }
+            //     let statusText = '🟢Open';
+            //     if(thread.locked) {
+            //         statusText = 'Locked';
+            //     } else if(thread.archived) {
+            //         statusText = 'Closed';
+            //     }
 
-                const embed = new EmbedBuilder()
-                    .setTitle(`Ticket: ${thread.name}`)
-                    .setDescription(`**Created:** <t:${Math.floor(thread.createdTimestamp / 1000)}:F> (<t:${Math.floor(thread.createdTimestamp / 1000)}:R>)\n**Status**: ${statusText}\n**Link**: https://discord.com/channels/${interaction.guild.id}/${thread.id}`)
-                    .setColor('#0099FF');
+            //     const embed = new EmbedBuilder()
+            //         .setTitle(`Ticket: ${thread.name}`)
+            //         .setDescription(`**Created:** <t:${Math.floor(thread.createdTimestamp / 1000)}:F> (<t:${Math.floor(thread.createdTimestamp / 1000)}:R>)\n**Status**: ${statusText}\n**Link**: https://discord.com/channels/${interaction.guild.id}/${thread.id}`)
+            //         .setColor('#0099FF');
 
-                embeds.push(embed);
-            }
+            //     embeds.push(embed);
+            // }
+
+            embeds.push(new EmbedBuilder()
+                .setTitle(`Your Tickets`)
+                .setDescription(`Click on the threads icon <:threads:1298014776965857372> on top of this page and search for your user id \`${interaction.user.id}\`.`)
+                .setColor('#0099FF'));
 
             return await interaction.reply({
                 embeds: embeds,
