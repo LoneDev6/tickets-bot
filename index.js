@@ -817,6 +817,9 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             client.cooldown[interaction.user.id] = Date.now();
+
+            // Might take some time to fetch the threads.
+            await interaction.deferUpdate();
             
             const fetchedThreads = await interaction.channel.threads.fetchActive();
             const archivedThreads = await interaction.channel.threads.fetchArchived();
