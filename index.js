@@ -433,9 +433,6 @@ client.on('interactionCreate', async (interaction) => {
                 ]
             });
 
-            // Remove the user who closed the thread from the thread, to avoid the admin to have a cluttered list of threads.
-            await thread.members.remove(interaction.user.id);
-
             if(!thread.archived) {
                 await thread.setArchived(true, reason ? reason : 'No reason.');
             }
@@ -468,9 +465,6 @@ client.on('interactionCreate', async (interaction) => {
                     .setDescription(`This thread has been locked by <@${interaction.user.id}>.\nReason: ${reason || 'No reason.'}`)
                 ]
             });
-
-            // Remove the user who locked the thread from the thread, to avoid the admin to have a cluttered list of threads.
-            await thread.members.remove(interaction.user.id);
             
             if(!thread.locked) {
                 await thread.setLocked(true, reason ? reason : 'No reason.');
