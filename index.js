@@ -580,14 +580,26 @@ client.on('interactionCreate', async (interaction) => {
             await interaction.deferUpdate();
 
             if(await hasReachedMaxNumberOfThreads(interaction)) {
-                return await interaction.reply({
+                return await interaction.followUp({
                     content: 'You have reached the maximum amount of open threads. Please wait for a staff member to assist you.',
                     ephemeral: true
                 });
             }
 
-            const type = interaction.customId === 'modal_ticket_panel_create_thread_generic' ? 'Generic' : 'Payment';
             const description = interaction.fields.getTextInputValue('description');
+
+            // Check if all questions are answered correctly. (YES)
+            const question1 = interaction.fields.getTextInputValue('question1');
+            const question2 = interaction.fields.getTextInputValue('question2');
+            const question3 = interaction.fields.getTextInputValue('question3');
+            if (question1.toLowerCase() !== 'yes' || question2.toLowerCase() !== 'yes' || question3.toLowerCase() !== 'yes') {
+                return await interaction.followUp({
+                    content: `You need to answer all questions with \`YES\` to open a ticket.\nYour description was:\n\`\`\`\n${description}\n\`\`\``,
+                    ephemeral: true
+                });
+            }
+
+            const type = interaction.customId === 'modal_ticket_panel_create_thread_generic' ? 'Generic' : 'Payment';
             
             const thread = await interaction.channel.threads.create({
                 name: `${type}: ${interaction.user.username} (${interaction.user.id})`,
@@ -801,14 +813,47 @@ client.on('interactionCreate', async (interaction) => {
             const modal = new ModalBuilder()
                 .setCustomId(`modal_${interaction.customId}`)
                 .setTitle('Create a Ticket');
-            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder()
-                .setCustomId('description')
-                .setLabel("DESCRIPTION")
-                .setStyle(TextInputStyle.Paragraph)
-                .setRequired(true)
-                .setPlaceholder('Describe your issue. DO NOT REPORT BUGS HERE! USE GITHUB!') 
-                .setMinLength(48)
-            ));
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder()
+                        .setCustomId('question1')
+                        .setLabel("IS THIS A RARE OCCASION? YES/NO")
+                        .setStyle(TextInputStyle.Paragraph)
+                        .setRequired(true)
+                        .setPlaceholder('IS THIS A RARE OCCASION?\nPlease open a ticket only for rare occasions.\nYES/NO.')
+                        .setMinLength(2)
+                        .setMaxLength(3)
+                ),
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder()
+                        .setCustomId('question2')
+                        .setLabel("DID YOU SEARCH ON DISCORD AND GITHUB? YES/NO")
+                        .setStyle(TextInputStyle.Paragraph)
+                        .setRequired(true)
+                        .setPlaceholder('DID YOU SEARCH ON DISCORD/GITHUB?\nYES/NO.')
+                        .setMinLength(2)
+                        .setMaxLength(3)
+                ),
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder()
+                        .setCustomId('question3')
+                        .setLabel("DID YOU READ THE GUIDELINES? YES/NO")
+                        .setStyle(TextInputStyle.Paragraph)
+                        .setRequired(true)
+                        .setPlaceholder('DID YOU READ THE GUIDELINES?\nPlease read the guidelines before opening a ticket.\nYES/NO.')
+                        .setMinLength(2)
+                        .setMaxLength(3)
+                ),
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder()
+                        .setCustomId('description')
+                        .setLabel("DESCRIPTION")
+                        .setStyle(TextInputStyle.Paragraph)
+                        .setRequired(true)
+                        .setPlaceholder('DO NOT REPORT BUGS HERE! USE GITHUB!\nDescribe your issue.') 
+                        .setMinLength(48)
+                )
+            );
 
             return await interaction.showModal(modal);
         }
