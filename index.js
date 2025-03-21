@@ -102,40 +102,46 @@ client.on('ready', async () => {
 
     const guild = client.guilds.cache.get(config.guild);
 
-    try {
-        await guild.commands.set([]);
-        console.log(`✅ All previous commands deleted`);
-    } catch (error) {
-        console.error("❌ Failed to delete previous commands.", error);
-    }
-
-    guild.commands.create(new SlashCommandBuilder()
+    if (!guild.commands.cache.find(cmd => cmd.name === 'rename')) {
+        guild.commands.create(new SlashCommandBuilder()
         .setName('rename')
         .setDescription('Rename a thread, channel or forum post')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+    } else {
+        client.logger.log('The "rename" command already exists.');
+    }
 
-    guild.commands.create(new SlashCommandBuilder()
-        .setName('close')
-        .setDescription('Close the thread.')
-        .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
-            { name: 'Solved', value: 'Solved' },
-            { name: 'Inactivity', value: 'Inactivity' },
-        ).setDescription('Reason for closing the thread.'))
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+    if (!guild.commands.cache.find(cmd => cmd.name === 'close')) {
+        guild.commands.create(new SlashCommandBuilder()
+            .setName('close')
+            .setDescription('Close the thread.')
+            .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
+                { name: 'Solved', value: 'Solved' },
+                { name: 'Inactivity', value: 'Inactivity' },
+            ).setDescription('Reason for closing the thread.'))
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+    } else {
+        client.logger.log('The "rencloseame" command already exists.');
+    }
 
-    guild.commands.create(new SlashCommandBuilder()
-        .setName('lock')
-        .setDescription('Lock the thread.')
-        .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
-            { name: 'Solved. No further messages are expected.', value: 'Solved. No further messages are expected.' },
-            { name: 'Invalid Section', value: 'Invalid section.' },
-            { name: 'No information provided', value: 'No information provided.' },
-            { name: 'Duplicate', value: 'Duplicate' },
-            { name: 'Spam', value: 'Spam' },
-            { name: 'Inappropriate', value: 'Inappropriate' },
-        ).setDescription('Reason for closing the thread.'))
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+    if (!guild.commands.cache.find(cmd => cmd.name === 'lock')) {
+        guild.commands.create(new SlashCommandBuilder()
+            .setName('lock')
+            .setDescription('Lock the thread.')
+            .addStringOption(option => option.setName('reason').setRequired(false).addChoices(
+                { name: 'Solved. No further messages are expected.', value: 'Solved. No further messages are expected.' },
+                { name: 'Invalid Section', value: 'Invalid section.' },
+                { name: 'No information provided', value: 'No information provided.' },
+                { name: 'Duplicate', value: 'Duplicate' },
+                { name: 'Spam', value: 'Spam' },
+                { name: 'Inappropriate', value: 'Inappropriate' },
+            ).setDescription('Reason for closing the thread.'))
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
 
+    } else {
+        client.logger.log('The "lock" command already exists.');
+    }
+   
     console.log('✅ Registered commands successfully!');
 
 
