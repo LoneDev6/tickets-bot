@@ -290,6 +290,15 @@ async function updateLastMessageSent() {
                     .setDescription(description);
             }
 
+
+            // Check if the last message was sent by the ticket opener.
+            // If so, change the embed color to yellow, else to blue.
+            if(data.userId === lastMessage.author.id) {
+                embeds[0].setColor('#FFFF00');
+            } else {
+                embeds[0].setColor('#0099FF');
+            }
+
             client.logger.info(`updateLastMessageSent - Updated ticket ${thread.id} - ${thread.name}, last message by <@${lastMessage.author.id}>, at ${new Date(lastMessage.createdTimestamp).toISOString()}, content: ${partialContent}.`);
 
             // Apply the changes to the notification message
