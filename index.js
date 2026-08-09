@@ -41,12 +41,7 @@ const client = new discord.Client({
     closeTimeout: 3_000 ,
     waitGuildTimeout: 15_000,
     intents: [
-        discord.GatewayIntentBits.Guilds,
-        discord.GatewayIntentBits.GuildMembers,
-        discord.GatewayIntentBits.GuildBans,
-        discord.GatewayIntentBits.GuildPresences,
-        discord.GatewayIntentBits.GuildMessages,
-        discord.GatewayIntentBits.MessageContent
+        discord.GatewayIntentBits.Guilds
     ],
     allowedMentions: {
         parse: ["users"],
@@ -121,7 +116,7 @@ client.on('ready', async () => {
             ).setDescription('Reason for closing the thread.'))
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
     } else {
-        client.logger.log('The "rencloseame" command already exists.');
+        client.logger.log('The "close" command already exists.');
     }
 
     if (!guild.commands.cache.find(cmd => cmd.name === 'lock')) {
@@ -140,6 +135,15 @@ client.on('ready', async () => {
 
     } else {
         client.logger.log('The "lock" command already exists.');
+    }
+
+    if (!guild.commands.cache.find(cmd => cmd.name === 'ticket-panel')) {
+        guild.commands.create(new SlashCommandBuilder()
+            .setName('ticket-panel')
+            .setDescription('Create the ticket panel.')
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator));
+    } else {
+        client.logger.log('The "ticket-panel" command already exists.');
     }
    
     console.log('✅ Registered commands successfully!');
@@ -174,7 +178,10 @@ process.on('uncaughtException', error => {
 });
 
 // Discord bot login
-client.login(settings.DISCORD_TOKEN);
+client.login(settings.DISCORD_TOKEN).catch(error => {
+    client.logger.error(`Discord login failed: ${error?.message || error}`, error);
+    process.exit(1);
+});
 
 // Iterate all messages in the tickets notification channel and update the last message sent by the user, each 30 seconds.
 async function updateLastMessageSent() {
@@ -255,26 +262,17 @@ async function updateLastMessageSent() {
                 });
             }
 
-            // Find also "Last Message Content" and update it.
-            const lastMessageContentField = embeds[0].fields.find(field => field.name === 'Last Message Content');
-            const partialContent = lastMessage.content.length > 128 ? lastMessage.content.substring(0, 128) + '...' : lastMessage.content;
-            if (lastMessageContentField) {
-                lastMessageContentField.value = partialContent;
-            } else {
-                embeds[0].fields.push({
-                    name: 'Last Message Content',
-                    value: partialContent
-                });
+            const lastMessageContentField = embeds[0].fields.findIndex(field => field.name === 'Last Message Content');
+            if (lastMessageContentField !== -1) {
+                embeds[0].fields.splice(lastMessageContentField, 1);
             }
 
             // Update the thread notification message to include the new user in the list of users who already joined the thread.
             // Add a new embed to list the current users if not available or edit it by attaching that new embed to the ones.
-            // NOTE: also add interaction.user.id to the list of users.
-            // Force thread members to be fetched to avoid caching issues.
-            await thread.members.fetch();
-            const mentions = thread.members.cache
-                .filter(member => !member.user.bot && member.id !== data.userId)
-                .map(member => `<@${member.id}>`);
+            // ponytail: tracks button joins only; request Guild Members approval if manual joins must be mirrored.
+            const mentions = (data.joinedUserIds || [])
+                .filter(userId => userId !== data.userId)
+                .map(userId => `<@${userId}>`);
             let description = mentions.join(', ');
             if (description.length === 0) {
                 description = 'None.';
@@ -299,7 +297,7 @@ async function updateLastMessageSent() {
                 embeds[0] = EmbedBuilder.from(embeds[0]).setColor('#0099FF');
             }
 
-            client.logger.info(`updateLastMessageSent - Updated ticket ${thread.id} - ${thread.name}, last message by <@${lastMessage.author.id}>, at ${new Date(lastMessage.createdTimestamp).toISOString()}, content: ${partialContent}.`);
+            client.logger.info(`updateLastMessageSent - Updated ticket ${thread.id} - ${thread.name}, last message by <@${lastMessage.author.id}>, at ${new Date(lastMessage.createdTimestamp).toISOString()}.`);
 
             // Apply the changes to the notification message
             await notificationMessage.edit({
@@ -317,15 +315,25 @@ async function updateLastMessageSent() {
     }
 }
 
-client.on('messageCreate', async message => {
-    if (message.author.bot)
-        return
+async function hasReachedMaxNumberOfThreads(interaction) {
+    // Iterate through threads and check if the user already has max 1 opened thread in the recent 48 hours.
+    let threadCount = 0;
+    await interaction.channel.threads.cache.forEach(thread => {
+        if (!thread.archived && !thread.locked && thread.name.includes(interaction.user.id) && thread.createdTimestamp + 172800000 >= Date.now())
+            threadCount++;
+    });
 
-    if (message.channel.type === "dm")
-        return
+    if (threadCount >= 1) {
+        client.logger.info(`User @${interaction.user.tag} (${interaction.user.id}) tried to create a new ticket but has reached the maximum amount of open threads.`);
+        return true;
+    }
 
-    if (message.author.id === '289137568144949248') {
-        if(message.content === "aaacreateThreadPanel") {
+    return false;
+}
+
+client.on('interactionCreate', async (interaction) => {
+    if (interaction.isCommand()) {
+        if (interaction.commandName === 'ticket-panel') {
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                     .setCustomId('ticket_panel_create_thread_generic')
@@ -355,35 +363,12 @@ Do not abuse the ticket system.
 ### Click on the threads icon <:threads:1298014776965857372> on top of this page to see your tickets.`)
                 .setColor('#a0401a');
 
-            // Send the message with the buttons and embed
-            return await message.channel.send({
+            return await interaction.reply({
                 content: '',
                 components: [row],
                 embeds: [embed]
             });
-        }
-    }
-});
-
-async function hasReachedMaxNumberOfThreads(interaction) {
-    // Iterate through threads and check if the user already has max 1 opened thread in the recent 48 hours.
-    let threadCount = 0;
-    await interaction.channel.threads.cache.forEach(thread => {
-        if (!thread.archived && !thread.locked && thread.name.includes(interaction.user.id) && thread.createdTimestamp + 172800000 >= Date.now())
-            threadCount++;
-    });
-
-    if (threadCount >= 1) {
-        client.logger.info(`User @${interaction.user.tag} (${interaction.user.id}) tried to create a new ticket but has reached the maximum amount of open threads.`);
-        return true;
-    }
-
-    return false;
-}
-
-client.on('interactionCreate', async (interaction) => {
-    if (interaction.isCommand()) {
-        if (interaction.commandName === 'rename') {
+        } else if (interaction.commandName === 'rename') {
             // Check if it matches regex "Invalid: Username (289137568144949248) wow! nice thread"
             const match = interaction.channel.name.match(/^(.*): (.+) \((\d+)\)(| .*)$/);
             if (match) {
@@ -716,6 +701,7 @@ client.on('interactionCreate', async (interaction) => {
 
             client.botData.set(`ticket_${thread.id}`, {
                 userId: interaction.user.id,
+                joinedUserIds: [],
                 notificationMessageId: sentMessage0.id,
                 openedMessageId: sentMessage1.id,
                 ticketInfoMessageId: ticketInfoMessageSent.id,
@@ -937,6 +923,12 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             await thread.members.add(interaction.user.id);
+
+            const data = getData(thread);
+            if (data && !data.joinedUserIds?.includes(interaction.user.id)) {
+                data.joinedUserIds = [...(data.joinedUserIds || []), interaction.user.id];
+                client.botData.set(`ticket_${thread.id}`, data);
+            }
 
             return await interaction.reply({
                 content: 'You have successfully joined the ticket thread.',
