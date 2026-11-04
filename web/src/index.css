@@ -137,7 +137,7 @@
 
   .ticket-preview:is(:hover, :focus-visible) > span {
     display: inline-block;
-    animation: ticket-preview-scroll var(--preview-duration, 0s) linear 1s infinite alternate;
+    animation: ticket-preview-scroll var(--preview-duration, 0s) linear infinite alternate;
   }
 }
 

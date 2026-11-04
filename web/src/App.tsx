@@ -77,7 +77,7 @@ function TicketPreview({ ticket, href }: { ticket: Ticket; href: string }) {
   const measure = (element: HTMLAnchorElement) => {
     const overflow = Math.max(0, (element.firstElementChild?.getBoundingClientRect().width || element.scrollWidth) - element.clientWidth)
     element.style.setProperty("--preview-overflow", `${overflow}px`)
-    element.style.setProperty("--preview-duration", `${Math.max(4, overflow / 35)}s`)
+    element.style.setProperty("--preview-duration", `${Math.max(1, overflow / 100)}s`)
   }
   return <AppLink data-ticket-link href={href} title={text} className="ticket-preview block truncate font-medium underline-offset-4 hover:underline" onMouseEnter={(event) => measure(event.currentTarget)} onFocus={(event) => measure(event.currentTarget)}><span>{text}</span></AppLink>
 }
