@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react"
-import type { ReactNode } from "react"
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import type { ComponentProps, ReactNode } from "react"
 import { ArrowLeft, ExternalLink, LogOut, RefreshCw, Search } from "lucide-react"
 import { ApiError, apiGet, apiPost, type PrivacyPolicy, type Session, type SyncState, type Ticket, type TicketList, type TicketMessage, type TicketMessages, type TicketStatus } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -60,10 +60,34 @@ function statusFromUrl(value: string | null): TicketStatus | "all" {
   return statusValues.includes(value as TicketStatus | "all") ? (value as TicketStatus | "all") : "open"
 }
 
+function navigate(href: string) {
+  if (new URL(href, window.location.href).href === window.location.href) return
+  window.history.pushState(null, "", href)
+  window.dispatchEvent(new PopStateEvent("popstate"))
+}
+
+function subscribeLocation(onChange: () => void) {
+  window.addEventListener("popstate", onChange)
+  return () => window.removeEventListener("popstate", onChange)
+}
+
+function locationSnapshot() { return window.location.href }
+
+function AppLink({ onClick, ...props }: ComponentProps<"a">) {
+  return <a {...props} onClick={(event) => {
+    onClick?.(event)
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || props.download !== undefined || (props.target && props.target !== "_self")) return
+    const url = new URL(event.currentTarget.href)
+    if (url.origin !== window.location.origin || !/^\/(?:privacy\/?|tickets\/[^/]+\/?)?$/.test(url.pathname)) return
+    event.preventDefault()
+    navigate(`${url.pathname}${url.search}${url.hash}`)
+    window.scrollTo(0, 0)
+  }} />
+}
+
 function updateQuery(params: URLSearchParams) {
   const search = params.toString()
-  window.history.pushState(null, "", search ? `/?${search}` : "/")
-  window.dispatchEvent(new PopStateEvent("popstate"))
+  navigate(search ? `/?${search}` : "/")
 }
 
 function SyncNotice({ sync, connection, onReconnect }: { sync: SyncState; connection: "connecting" | "live" | "reconnecting"; onReconnect: () => void }) {
@@ -100,8 +124,10 @@ function SyncNotice({ sync, connection, onReconnect }: { sync: SyncState; connec
 }
 
 function App() {
-  const isPrivacy = window.location.pathname === "/privacy"
-  const [auth, setAuth] = useState<AuthState>({ state: isPrivacy ? "signed-out" : "loading", expired: false })
+  const location = useSyncExternalStore(subscribeLocation, locationSnapshot)
+  const path = new URL(location).pathname
+  const isPrivacy = path === "/privacy" || path === "/privacy/"
+  const [auth, setAuth] = useState<AuthState>({ state: "loading" })
   const [sync, setSync] = useState<SyncState>({ ready: false, updatedAt: null, error: null })
   const [revision, setRevision] = useState<number | null>(null)
   const [connection, setConnection] = useState<"connecting" | "live" | "reconnecting">("connecting")
@@ -109,9 +135,10 @@ function App() {
   const [eventRetry, setEventRetry] = useState(0)
   const [logoutError, setLogoutError] = useState("")
   const onUnauthorized = useCallback(() => setAuth({ state: "signed-out", expired: true }), [])
+  const loadSession = !isPrivacy && auth.state === "loading"
 
   useEffect(() => {
-    if (isPrivacy) return
+    if (!loadSession) return
     const controller = new AbortController()
     apiGet<Session>("/api/session", controller.signal)
       .then((session) => {
@@ -125,7 +152,7 @@ function App() {
         else setAuth({ state: "error", message: error instanceof Error ? error.message : "Connection error." })
       })
     return () => controller.abort()
-  }, [isPrivacy, sessionRetry])
+  }, [loadSession, sessionRetry])
 
   useEffect(() => {
     if (auth.state !== "ready") return
@@ -192,7 +219,7 @@ function App() {
             <Button asChild>
               <a href="/auth/discord">Sign in with Discord</a>
             </Button>
-            <a className="text-sm text-muted-foreground underline underline-offset-4" href="/privacy">Privacy policy</a>
+            <AppLink className="text-sm text-muted-foreground underline underline-offset-4" href="/privacy">Privacy policy</AppLink>
           </CardContent>
         </Card>
       </PageShell>
@@ -211,12 +238,11 @@ function App() {
             <Button variant="outline" size="sm" onClick={() => { setAuth({ state: "loading" }); setSessionRetry((retry) => retry + 1) }}>Retry</Button>
           </AlertDescription>
         </Alert>
-        <a className="text-sm text-muted-foreground underline underline-offset-4" href="/privacy">Privacy policy</a>
+        <AppLink className="text-sm text-muted-foreground underline underline-offset-4" href="/privacy">Privacy policy</AppLink>
       </PageShell>
     )
   }
 
-  const path = window.location.pathname
   const detailMatch = path.match(/^\/tickets\/([^/]+)\/?$/)
   let ticketId: string | null = null
   if (detailMatch) {
@@ -234,7 +260,7 @@ function App() {
         {logoutError && <Alert variant="destructive"><AlertDescription>{logoutError}</AlertDescription></Alert>}
         <SyncNotice sync={sync} connection={connection} onReconnect={() => { setConnection("connecting"); setEventRetry((retry) => retry + 1) }} />
         {ticketId ? (
-          <TicketDetail id={ticketId} session={auth.session} revision={revision} sync={sync} onUnauthorized={onUnauthorized} />
+          <TicketDetail key={ticketId} id={ticketId} session={auth.session} revision={revision} sync={sync} onUnauthorized={onUnauthorized} />
         ) : (
           <TicketsPage revision={revision} onSync={setSync} onUnauthorized={onUnauthorized} />
         )}
@@ -247,9 +273,9 @@ function Header({ username, onLogout }: { username: string; onLogout: () => void
   return (
     <header className="border-b">
       <div className="mx-auto flex min-h-14 w-full max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
-        <a href="/" className="font-semibold">Ticket dashboard</a>
+        <AppLink href="/" className="font-semibold">Ticket dashboard</AppLink>
         <nav aria-label="Main navigation" className="flex items-center gap-3">
-          <a href="/privacy" className="text-sm text-muted-foreground underline-offset-4 hover:underline">Privacy</a>
+          <AppLink href="/privacy" className="text-sm text-muted-foreground underline-offset-4 hover:underline">Privacy</AppLink>
           <Separator orientation="vertical" className="h-5" />
           <span className="hidden text-sm text-muted-foreground sm:inline">{username}</span>
           <Button variant="ghost" size="sm" onClick={onLogout} aria-label="Sign out">
@@ -270,7 +296,7 @@ function StatePage({ title, description }: { title: string; description: string 
     <PageShell>
       <Card className="mx-auto w-full max-w-lg">
         <CardHeader><CardTitle>{title}</CardTitle><CardDescription>{description}</CardDescription></CardHeader>
-        <CardContent><a className="text-sm underline underline-offset-4" href="/privacy">Privacy policy</a></CardContent>
+        <CardContent><AppLink className="text-sm underline underline-offset-4" href="/privacy">Privacy policy</AppLink></CardContent>
       </Card>
     </PageShell>
   )
@@ -281,7 +307,8 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
   const [search, setSearch] = useState(params.get("q") ?? "")
   const [opener, setOpener] = useState(params.get("opener") ?? "")
   const [retry, setRetry] = useState(0)
-  const [list, setList] = useState<{ data: TicketList | null; error: string; nextError: string; loadingMore: boolean; requestKey: string }>({ data: null, error: "", nextError: "", loadingMore: false, requestKey: "" })
+  const [list, setList] = useState<{ data: TicketList | null; error: string; nextError: string; loadingMore: boolean; requestKey: string; query: string }>({ data: null, error: "", nextError: "", loadingMore: false, requestKey: "", query: "" })
+  const loadedWindow = useRef({ query: "", count: 25 })
   const sentinel = useRef<HTMLDivElement>(null)
   const listController = useRef<AbortController | null>(null)
   const loadingMoreRef = useRef(false)
@@ -292,6 +319,7 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
   const requestKey = `${query}|${revision}|${retry}`
   const pending = list.requestKey !== requestKey
   const currentError = pending ? "" : list.error
+  const visibleData = list.query === query ? list.data : null
 
   useEffect(() => {
     const update = () => {
@@ -317,15 +345,28 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
     queryParams.delete("page")
     queryParams.delete("cursor")
     queryParams.delete("revision")
-    apiGet<TicketList>(`/api/tickets?${queryParams.toString()}`, controller.signal)
+    const targetCount = loadedWindow.current.query === query ? loadedWindow.current.count : 25
+    async function refresh() {
+      let data = await apiGet<TicketList>(`/api/tickets?${queryParams}`, controller.signal)
+      while (data.nextCursor && data.tickets.length < targetCount) {
+        queryParams.set("cursor", data.nextCursor)
+        queryParams.set("revision", String(data.revision))
+        const page = await apiGet<TicketList>(`/api/tickets?${queryParams}`, controller.signal)
+        data = { ...page, tickets: [...data.tickets, ...page.tickets] }
+      }
+      return data
+    }
+    refresh()
       .then((data) => {
+        if (controller.signal.aborted) return
         onSync(data.sync)
-        setList({ data, error: "", nextError: "", loadingMore: false, requestKey })
+        loadedWindow.current = { query, count: data.tickets.length }
+        setList({ data, error: "", nextError: "", loadingMore: false, requestKey, query })
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return
         if (error instanceof ApiError && [401, 403].includes(error.status)) onUnauthorized()
-        setList((current) => ({ ...current, data: null, error: error instanceof Error ? error.message : "The server connection is unavailable.", nextError: "", loadingMore: false, requestKey }))
+        setList((current) => ({ ...current, data: current.query === query ? current.data : null, error: error instanceof Error ? error.message : "The server connection is unavailable.", nextError: "", loadingMore: false, requestKey, query }))
       })
     return () => { controller.abort(); listController.current?.abort() }
   }, [query, requestKey, status, type, sort, onSync, onUnauthorized])
@@ -346,10 +387,11 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
       const data = await apiGet<TicketList>(`/api/tickets?${queryParams}`, controller.signal)
       if (controller.signal.aborted) return
       onSync(data.sync)
+      loadedWindow.current = { query, count: list.data.tickets.length + data.tickets.length }
       setList((current) => ({ ...current, data: current.data ? { ...data, tickets: [...current.data.tickets, ...data.tickets.filter((ticket) => !current.data!.tickets.some((old) => old.threadId === ticket.threadId))] } : data, loadingMore: false, nextError: "" }))
     } catch (error) {
       if (controller.signal.aborted) return
-      if (error instanceof ApiError && error.status === 409) { setList((current) => ({ ...current, data: null, requestKey: "", loadingMore: false })); setRetry((value) => value + 1); return }
+      if (error instanceof ApiError && error.status === 409) { setList((current) => ({ ...current, requestKey: "", loadingMore: false })); setRetry((value) => value + 1); return }
       if (error instanceof ApiError && [401, 403].includes(error.status)) onUnauthorized()
       setList((current) => ({ ...current, loadingMore: false, nextError: error instanceof Error ? error.message : "Unable to load more tickets." }))
     } finally {
@@ -392,7 +434,7 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
           <h1 id="tickets-heading" className="text-2xl font-semibold tracking-tight">Tickets</h1>
           <p className="text-sm text-muted-foreground">Browse tickets recorded by the bot.</p>
         </div>
-        <p className="text-sm text-muted-foreground">{list.data && !pending && !currentError ? `${list.data.total} tickets` : ""}</p>
+        <p className="text-sm text-muted-foreground">{visibleData ? `${visibleData.total} tickets` : ""}</p>
       </div>
 
       <Tabs value={status} onValueChange={(value) => changeFilter("status", value)}>
@@ -437,7 +479,7 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
       </form>
 
       {currentError && <Alert variant="destructive"><AlertTitle>Unable to load tickets</AlertTitle><AlertDescription className="flex flex-wrap items-center justify-between gap-3"><span>{currentError}</span><Button variant="outline" size="sm" onClick={() => setRetry((value) => value + 1)}>Retry</Button></AlertDescription></Alert>}
-      {currentError ? null : pending || !list.data ? <TicketListSkeleton /> : list.data.tickets.length === 0 ? (
+      {!visibleData ? currentError ? null : <TicketListSkeleton /> : visibleData.tickets.length === 0 ? (
         <Card><CardContent className="flex flex-col gap-1 py-8 text-center"><p className="font-medium">No tickets found</p><p className="text-sm text-muted-foreground">Change the filters or search to see other results.</p></CardContent></Card>
       ) : list.data ? (
         <>
@@ -449,7 +491,7 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
               <TableBody>
                 {list.data.tickets.map((ticket) => (
                   <TableRow key={ticket.threadId}>
-                    <TableCell><a className="font-medium underline-offset-4 hover:underline" href={hrefFor(ticket)}>{ticketName(ticket)}</a>{ticket.escalatedAt && <Badge variant="destructive" className="ml-2">Escalated</Badge>}<p className="mt-1 max-w-sm truncate text-xs text-muted-foreground">{ticket.description || "—"}</p></TableCell>
+                    <TableCell><AppLink className="font-medium underline-offset-4 hover:underline" href={hrefFor(ticket)}>{ticketName(ticket)}</AppLink>{ticket.escalatedAt && <Badge variant="destructive" className="ml-2">Escalated</Badge>}<p className="mt-1 max-w-sm truncate text-xs text-muted-foreground">{ticket.description || "—"}</p></TableCell>
                     <TableCell>{ticket.openerName || ticket.openerId || "Unknown"}<p className="mt-1 text-xs text-muted-foreground">{ticket.openerId || "—"}</p></TableCell>
                     <TableCell>{ticketTypeLabel(ticket.type)}</TableCell>
                     <TableCell>{statusBadge(ticket.status)}</TableCell>
@@ -463,7 +505,7 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
           <ul className="flex flex-col divide-y rounded-md border md:hidden" aria-label="Ticket list">
             {list.data.tickets.map((ticket) => (
               <li key={ticket.threadId} className="p-4">
-                <a className="font-medium underline-offset-4 hover:underline" href={hrefFor(ticket)}>{ticketName(ticket)}</a>
+                <AppLink className="font-medium underline-offset-4 hover:underline" href={hrefFor(ticket)}>{ticketName(ticket)}</AppLink>
                 <p className="mt-1 text-sm text-muted-foreground">{ticket.openerName || ticket.openerId || "Unknown"} · {ticketTypeLabel(ticket.type)}</p>
                 <p className="mt-2 line-clamp-2 text-sm">{ticket.description || "—"}</p>
                 <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">{statusBadge(ticket.status)}{ticket.escalatedAt && <Badge variant="destructive">Escalated</Badge>}<span className="text-xs text-muted-foreground">Updated {formatDate(ticket.updatedAt)}</span></div>
@@ -480,7 +522,7 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
       ) : null}
         </TabsContent>
       </Tabs>
-      <footer className="border-t pt-4 text-xs text-muted-foreground">Conversations and attachments are excluded from the list. <a className="underline underline-offset-4" href="/privacy">Privacy policy</a></footer>
+      <footer className="border-t pt-4 text-xs text-muted-foreground">Conversations and attachments are excluded from the list. <AppLink className="underline underline-offset-4" href="/privacy">Privacy policy</AppLink></footer>
     </section>
   )
 }
@@ -490,6 +532,7 @@ function TicketListSkeleton() {
 }
 
 function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: string; session: Session; revision: number | null; sync: SyncState; onUnauthorized: () => void }) {
+  const [retry, setRetry] = useState(0)
   const [ticket, setTicket] = useState<{ data: Ticket | null; error: string; requestKey: string }>({ data: null, error: "", requestKey: "" })
   const [messages, setMessages] = useState<{ data: TicketMessages | null; error: string; requestKey: string; loadingMore: boolean; olderError: string }>({ data: null, error: "", requestKey: "", loadingMore: false, olderError: "" })
   const olderMessagesController = useRef<AbortController | null>(null)
@@ -497,7 +540,7 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
   const [actionNotice, setActionNotice] = useState("")
   const [actionError, setActionError] = useState("")
   const [actionReason, setActionReason] = useState("")
-  const ticketRequestKey = `${id}|${revision}`
+  const ticketRequestKey = `${id}|${revision}|${retry}`
   const messagesRequestKey = ticketRequestKey
   const ticketPending = ticket.requestKey !== ticketRequestKey
   const ticketError = ticketPending ? "" : ticket.error
@@ -576,12 +619,12 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
   }
 
   if (ticketPending && !ticket.data) return <><Skeleton className="h-8 w-64" /><Skeleton className="h-80 w-full" /></>
-  if (!ticket.data) return <Alert variant="destructive"><AlertTitle>Unable to load ticket</AlertTitle><AlertDescription className="flex flex-wrap items-center justify-between gap-3"><span>{ticketError}</span><Button variant="outline" size="sm" onClick={() => window.location.reload()}>Retry</Button></AlertDescription></Alert>
+  if (!ticket.data) return <Alert variant="destructive"><AlertTitle>Unable to load ticket</AlertTitle><AlertDescription className="flex flex-wrap items-center justify-between gap-3"><span>{ticketError}</span><Button variant="outline" size="sm" onClick={() => setRetry((value) => value + 1)}>Retry</Button></AlertDescription></Alert>
   const item = ticket.data
   const discordHref = safeDiscordUrl(item.discordUrl)
   return (
     <section className="flex flex-col gap-6" aria-labelledby="ticket-heading">
-      <a href={returnTo} className="inline-flex w-fit items-center gap-2 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"><ArrowLeft className="size-4" />Back to tickets</a>
+      <AppLink href={returnTo} className="inline-flex w-fit items-center gap-2 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"><ArrowLeft className="size-4" />Back to tickets</AppLink>
       {ticketError && <Alert variant="destructive"><AlertTitle>Ticket data may be out of date</AlertTitle><AlertDescription>{ticketError}</AlertDescription></Alert>}
       {ticketPending && <p className="text-sm text-muted-foreground" role="status">Updating ticket…</p>}
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -711,8 +754,8 @@ function PrivacyPage() {
     <>
       <header className="border-b">
         <div className="mx-auto flex min-h-14 w-full max-w-4xl items-center justify-between gap-4 px-4 sm:px-6">
-          <a href="/" className="font-semibold">Ticket dashboard</a>
-          <a href="/" className="text-sm text-muted-foreground underline-offset-4 hover:underline">Open dashboard</a>
+          <AppLink href="/" className="font-semibold">Ticket dashboard</AppLink>
+          <AppLink href="/" className="text-sm text-muted-foreground underline-offset-4 hover:underline">Open dashboard</AppLink>
         </div>
       </header>
       <main className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-8 sm:px-6">

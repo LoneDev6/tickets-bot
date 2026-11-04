@@ -16,6 +16,8 @@ Per sviluppo e verifica restano disponibili `npm ci`, `npm --prefix web ci`, `np
 
 Il frontend usa il registry ufficiale shadcn (`radix-nova`, base `neutral`) con React/Vite. Non contiene ticket fittizi in produzione. HTML, CSS, JavaScript e font statici sono serviti dallo stesso Express del bot. Le dipendenze frontend eventualmente già installate in `web/node_modules` non vengono più caricate dall'avvio.
 
+La navigazione tra elenco, dettaglio e privacy e i pulsanti Retry sono gestiti da React senza ricaricare il documento. URL e cronologia del browser restano utilizzabili. Gli aggiornamenti live mantengono visibili le righe e le pagine già caricate mentre recuperano i dati aggiornati.
+
 ## Configurazione
 
 Al primo avvio, se mancano dominio o ID pubblici, compare una **guida in console**. Spiega come creare il tunnel Cloudflare, chiede origine HTTPS, Application ID e ID del proprietario, mostra il redirect OAuth esatto e salva solo questi valori pubblici in `.runtime/setup.json`. Rispondere alle domande usando l'input della console Pterodactyl. Con tutti i valori già configurati la guida viene saltata.
