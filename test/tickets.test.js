@@ -10,6 +10,21 @@ const messageId = '120000000000000003';
 const key = randomBytes(32).toString('base64');
 const base = { threadId: ticketId, guildId: '120000000000000004', parentId: '120000000000000005', openerId: userId, description: 'private description' };
 
+test('cancelled legacy import neither applies a late scan nor marks import complete', async () => {
+    const controller = new AbortController();
+    let release;
+    const page = new Promise(resolve => { release = resolve; });
+    const store = new TicketStore(new Map(), key);
+    const importing = importLegacy({ client: { user: { id: userId }, channels: { fetch: async () => page } },
+        legacy: { indexes: [] }, store, settings: { guildId: base.guildId, ticketParentId: base.parentId },
+        channels: [base.parentId], apply: true, signal: controller.signal });
+    controller.abort();
+    release({ guildId: base.guildId, isTextBased: () => true });
+    await assert.rejects(importing, { name: 'AbortError' });
+    assert.equal(store.read('meta:legacy-complete'), null);
+    assert.deepEqual(store.all(), []);
+});
+
 test('authenticated encryption hides identifiers and payloads; wrong keys and tampering fail closed', () => {
     const database = new Map();
     const store = new TicketStore(database, key);

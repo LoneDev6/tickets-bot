@@ -67,3 +67,14 @@ test('fully configured externally proxied deployment skips wizard without tunnel
         assert.equal(fs.existsSync(path.join(f.root, '.runtime/setup.json')), false);
     } finally { f.close(); }
 });
+
+test('shutdown cancels a waiting setup prompt without saving partial settings', async () => {
+    const f = fixture();
+    try {
+        const controller = new AbortController();
+        const pending = configureDeployment(f.root, {}, { input: f.input, output: f.output, signal: controller.signal });
+        controller.abort();
+        await assert.rejects(pending, { name: 'AbortError' });
+        assert.equal(fs.existsSync(path.join(f.root, '.runtime/setup.json')), false);
+    } finally { f.close(); }
+});

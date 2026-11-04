@@ -15,6 +15,22 @@ function setup(client = {}) {
 }
 function thread() { return { id: ids.ticket, guildId: ids.guild, parentId: ids.parent, name: 'test', type: ChannelType.PrivateThread, createdTimestamp: Date.now(), archived: false, locked: false }; }
 
+test('stopping reconciliation ignores a late inventory response and schedules no more Discord work', async () => {
+    let release; let reads = 0;
+    const pending = new Promise(resolve => { release = resolve; });
+    const parent = { guildId: ids.guild, threads: { fetchActive: () => pending } };
+    const { store, service } = setup({ channels: { fetch: async () => { reads++; return parent; } } });
+    const syncing = service.reconcile();
+    await new Promise(resolve => setImmediate(resolve));
+    service.stop();
+    release({ threads: new Collection([[ids.ticket, thread()]]) });
+    await syncing;
+    assert.equal(store.get(ids.ticket), null);
+    assert.equal(reads, 1);
+    assert.equal(service.reconciling, false);
+    assert.equal(service.summaryTimer, null);
+});
+
 test('a failed setup preserves the created ticket; concurrent duplicate creation is rejected', async () => {
     const { store, service } = setup();
     let release;

@@ -16,7 +16,7 @@ function put(root, file, value = '{}') {
     fs.writeFileSync(path.join(root, file), value);
 }
 
-test('startup uses the prebuilt panel without frontend dependencies or compilation and isolates installer secrets', t => {
+test('startup uses the prebuilt panel without frontend dependencies or compilation and isolates installer secrets', async t => {
     const root = directory(t);
     for (const file of ['package.json', 'package-lock.json']) put(root, file);
     put(root, 'web/dist/index.html', '<script type="module" src="/assets/panel.js"></script>');
@@ -31,35 +31,100 @@ test('startup uses the prebuilt panel without frontend dependencies or compilati
             put(root, 'node_modules/better-sqlite3/build/Release/better_sqlite3.node', 'synthetic native module');
         },
     };
-    prepare(root, options);
+    await prepare(root, options);
     assert.equal(calls.length, 1);
     assert.deepEqual(calls[0].args, ['ci', '--include=dev', '--no-audit', '--no-fund']);
     for (const call of calls) { assert.equal(call.command, 'npm'); assert.deepEqual(call.settings.env, { PATH: '/synthetic/bin' }); assert.equal(call.settings.shell, false); }
-    prepare(root, options); assert.equal(calls.length, 1);
+    await prepare(root, options); assert.equal(calls.length, 1);
     put(root, 'web/src/App.tsx', 'changed source');
-    prepare(root, options); assert.equal(calls.length, 1);
+    await prepare(root, options); assert.equal(calls.length, 1);
     put(root, 'web/package-lock.json', '{"changed":true}');
-    prepare(root, options); assert.equal(calls.length, 1);
+    await prepare(root, options); assert.equal(calls.length, 1);
     put(root, 'package-lock.json', '{"changed":true}');
-    prepare(root, options); assert.equal(calls.length, 2);
+    await prepare(root, options); assert.equal(calls.length, 2);
     assert.equal(fs.existsSync(path.join(root, 'web/node_modules')), false);
     assert.equal(typeof require('../index').main, 'function');
 });
 
-test('failed dependency preparation never marks the installation complete', t => {
+test('failed dependency preparation never marks the installation complete', async t => {
     const root = directory(t);
     put(root, 'package.json'); put(root, 'package-lock.json');
     put(root, 'web/dist/index.html', 'synthetic compiled panel');
-    assert.throws(() => prepare(root, { log() {}, run() { throw new Error('synthetic npm error'); } }), /Preparazione npm fallita/);
+    await assert.rejects(prepare(root, { log() {}, run() { throw new Error('synthetic npm error'); } }), /Preparazione npm fallita/);
     assert.equal(fs.existsSync(path.join(root, 'node_modules/.tickets-prepared')), false);
 });
 
-test('missing or incomplete distributed panel fails clearly without starting an installer or compiler', t => {
+test('missing or incomplete distributed panel fails clearly without starting an installer or compiler', async t => {
     const root = directory(t);
     const options = { log() {}, run() { assert.fail('No installation or build should start'); } };
-    assert.throws(() => prepare(root, options), /Build pannello mancante/);
+    await assert.rejects(prepare(root, options), /Build pannello mancante/);
     put(root, 'web/dist/index.html', '<link href="/assets/missing.css" rel="stylesheet">');
-    assert.throws(() => prepare(root, options), /Build pannello incompleta/);
+    await assert.rejects(prepare(root, options), /Build pannello incompleta/);
+});
+
+test('cancelling dependency preparation never writes the completion stamp', async t => {
+    const root = directory(t);
+    put(root, 'package.json'); put(root, 'package-lock.json'); put(root, 'web/dist/index.html', 'synthetic panel');
+    const controller = new AbortController();
+    const preparing = prepare(root, { signal: controller.signal, log() {}, run(_command, _args, { signal }) {
+        return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    } });
+    controller.abort();
+    await assert.rejects(preparing, { name: 'AbortError' });
+    assert.equal(fs.existsSync(path.join(root, 'node_modules/.tickets-prepared')), false);
+});
+
+test('cancelling the real installer terminates its process group, including a stubborn descendant', { timeout: 8000, skip: process.platform !== 'linux' }, async t => {
+    const root = directory(t);
+    put(root, 'package.json'); put(root, 'package-lock.json'); put(root, 'web/dist/index.html', 'synthetic panel');
+    const pidsFile = path.join(root, 'installer-pids.json');
+    put(root, 'npm', `#!${process.execPath}
+const fs = require('node:fs');
+if (process.argv[2] === 'child') {
+    process.on('SIGTERM', () => {});
+    setInterval(() => {}, 1000);
+    process.send('ready');
+} else {
+    process.on('SIGTERM', () => process.exit(0));
+    const child = require('node:child_process').fork(__filename, ['child'], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+    child.once('message', () => fs.writeFileSync('installer-pids.json', JSON.stringify([process.pid, child.pid])));
+}
+`);
+    fs.chmodSync(path.join(root, 'npm'), 0o700);
+    const controller = new AbortController();
+    const preparing = prepare(root, { signal: controller.signal, log() {}, env: { PATH: root, TMPDIR: process.env.TMPDIR } });
+    let pids = [];
+    try {
+        for (let attempt = 0; attempt < 150 && !fs.existsSync(pidsFile); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+        assert(fs.existsSync(pidsFile), 'synthetic installer must start');
+        pids = JSON.parse(fs.readFileSync(pidsFile));
+        controller.abort();
+        await assert.rejects(preparing, { name: 'AbortError' });
+        const alive = pid => {
+            try { return fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1][0] !== 'Z'; }
+            catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+        };
+        for (let attempt = 0; attempt < 100 && pids.some(alive); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+        assert(pids.every(pid => !alive(pid)), 'no installer process may survive cancellation');
+        assert.equal(fs.existsSync(path.join(root, 'node_modules/.tickets-prepared')), false);
+    } finally {
+        controller.abort();
+        await preparing.catch(() => {});
+        for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
+    }
+});
+
+test('cancelling a connector body removes its partial download', async t => {
+    const root = directory(t);
+    const file = path.join(root, 'connector');
+    const controller = new AbortController();
+    const downloading = downloadVerified('https://synthetic.invalid/binary', file, '0'.repeat(64), async () => new Response(new ReadableStream({
+        start(stream) { stream.enqueue(new Uint8Array([1, 2, 3])); },
+    })), controller.signal);
+    await new Promise(resolve => setImmediate(resolve));
+    controller.abort();
+    await assert.rejects(downloading, { name: 'AbortError' });
+    assert.deepEqual(fs.readdirSync(root), []);
 });
 
 test('generated secrets survive restart, stay private and cannot be silently replaced', t => {

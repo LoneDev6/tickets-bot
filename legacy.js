@@ -31,7 +31,8 @@ function parseCard(message, settings, botId) {
     };
 }
 
-async function importLegacy({ client, legacy, store, settings, channels, apply = false, retire = false }) {
+async function importLegacy({ client, legacy, store, settings, channels, apply = false, retire = false, signal }) {
+    signal?.throwIfAborted();
     const candidates = new Map();
     const report = { records: 0, cards: 0, untrustedCards: 0, activeThreads: 0, archivedThreads: 0, candidates: 0, imported: 0, existing: 0, suppressed: 0, errors: 0, errorDetails: [], retired: 0, open: 0, closed: 0, locked: 0, deleted: 0, missingOpener: 0, missingDescription: 0 };
     const recordError = (detail, error) => {
@@ -57,10 +58,12 @@ async function importLegacy({ client, legacy, store, settings, channels, apply =
     for (const channelId of [...new Set(channels.filter(Boolean))]) {
         try {
             const channel = await client.channels.fetch(channelId);
+            signal?.throwIfAborted();
             if (!channel || channel.guildId !== settings.guildId || !channel.isTextBased()) throw new Error('Legacy channel unavailable.');
             let before;
             while (true) {
                 const page = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+                signal?.throwIfAborted();
                 for (const message of page.values()) {
                     if (message.author?.bot && ![client.user.id, ...(settings.legacyBotIds || [])].includes(message.author.id)
                         && /^(New Ticket|Ticket (Closed|Locked|Deleted|Re-opened)):/.test(message.embeds?.[0]?.title || '')) {
@@ -79,12 +82,13 @@ async function importLegacy({ client, legacy, store, settings, channels, apply =
                 if (next === before) throw new Error('Legacy pagination did not advance.');
                 before = next;
             }
-        } catch (error) { recordError({ stage: 'card-scan', channelId, reason: 'unavailable-or-pagination' }, error); }
+        } catch (error) { signal?.throwIfAborted(); recordError({ stage: 'card-scan', channelId, reason: 'unavailable-or-pagination' }, error); }
     }
     // Inventory active and archived threads independently of cards or local records.
     if (client.rest) for (const parentId of settings.ticketParentIds || [settings.ticketParentId]) {
         try {
             const parent = await client.channels.fetch(parentId);
+            signal?.throwIfAborted();
             if (!parent || parent.guildId !== settings.guildId) throw new Error('Legacy parent unavailable.');
             const addThread = (thread, archived) => {
                 const threadParent = thread.parentId || thread.parent_id;
@@ -102,18 +106,20 @@ async function importLegacy({ client, legacy, store, settings, channels, apply =
                 if (archived) report.archivedThreads++; else report.activeThreads++;
             };
             const active = await parent.threads.fetchActive();
+            signal?.throwIfAborted();
             for (const thread of active.threads.values()) addThread(thread, false);
             let before;
             while (true) {
                 const query = new URLSearchParams({ limit: '100', ...(before ? { before } : {}) });
                 const page = await client.rest.get(`/channels/${parentId}/threads/archived/private`, { query });
+                signal?.throwIfAborted();
                 for (const thread of page.threads) addThread({ ...thread, guild_id: settings.guildId }, true);
                 if (!page.has_more || !page.threads.length) break;
                 const next = page.threads.at(-1).thread_metadata?.archive_timestamp;
                 if (!next || next === before) throw new Error('Legacy archive pagination did not advance.');
                 before = next;
             }
-        } catch (error) { recordError({ stage: 'parent-inventory', parentId, reason: 'unavailable-or-pagination' }, error); }
+        } catch (error) { signal?.throwIfAborted(); recordError({ stage: 'parent-inventory', parentId, reason: 'unavailable-or-pagination' }, error); }
     }
     report.candidates = candidates.size;
     for (const candidate of candidates.values()) {
@@ -123,12 +129,14 @@ async function importLegacy({ client, legacy, store, settings, channels, apply =
         if ((!candidate.description || !candidate.type) && candidate.ticketInfoMessageId && !store.suppressed(candidate.threadId) && !store.excluded(candidate.openerId)) {
             try {
                 const thread = await client.channels.fetch(candidate.threadId);
+                signal?.throwIfAborted();
                 const info = await thread.messages.fetch(candidate.ticketInfoMessageId);
+                signal?.throwIfAborted();
                 if ([client.user.id, ...(settings.legacyBotIds || [])].includes(info.author?.id)) {
                     const parsed = info.embeds?.[0]?.description?.match(/\*\*Type:\*\*\s*(.*?)\n\*\*Description:\*\*\s*([\s\S]*)/);
                     if (parsed) { candidate.type ||= parsed[1]; candidate.description ||= parsed[2]; }
                 }
-            } catch { /* A missing information message does not invalidate thread metadata. */ }
+            } catch { signal?.throwIfAborted(); /* A missing information message does not invalidate thread metadata. */ }
         }
         const state = candidate.deletedAt ? 'deleted' : candidate.locked ? 'locked' : candidate.archived ? 'closed' : 'open';
         report[state]++; if (!candidate.openerId) report.missingOpener++;

@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomBytes } = require('node:crypto');
-const { execFileSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 
@@ -16,7 +16,32 @@ function failure(message) { return Object.assign(new Error(message), { startup: 
 function hash(value) { return createHash('sha256').update(value).digest('hex'); }
 function matches(file, value) { return fs.existsSync(file) && fs.readFileSync(file, 'utf8') === value; }
 
-function prepare(root = __dirname, { run = execFileSync, env = process.env, log = console.log } = {}) {
+function install(command, args, options) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(command, args, { ...options, stdio: 'inherit', detached: process.platform !== 'win32' });
+        let failure; let force;
+        const kill = signal => {
+            if (process.platform === 'win32') child.kill(signal);
+            else if (child.pid) { try { process.kill(-child.pid, signal); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
+        };
+        const abort = () => {
+            kill('SIGTERM');
+            force = setTimeout(() => kill('SIGKILL'), 5000);
+        };
+        options.signal?.addEventListener('abort', abort, { once: true });
+        child.on('error', error => { failure = error; });
+        child.once('close', code => {
+            if (options.signal?.aborted || failure || code !== 0) kill('SIGKILL');
+            clearTimeout(force);
+            options.signal?.removeEventListener('abort', abort);
+            if (failure || code !== 0) reject(failure || new Error('Dependency installation failed.'));
+            else resolve();
+        });
+    });
+}
+
+async function prepare(root = __dirname, { run = install, env = process.env, log = console.log, signal } = {}) {
+    signal?.throwIfAborted();
     const [major, minor] = process.versions.node.split('.').map(Number);
     if (!((major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major > 22)) throw failure('Serve Node 20.19+ oppure 22.12+. Cambia runtime nel pannello Pterodactyl.');
     const dist = path.join(root, 'web', 'dist');
@@ -26,9 +51,9 @@ function prepare(root = __dirname, { run = execFileSync, env = process.env, log 
     if (assets.some(([, asset]) => !fs.existsSync(path.join(dist, asset.slice(1))))) throw failure('Build pannello incompleta. Ricompila in locale e pubblica tutta la cartella web/dist.');
     // Installers receive no Discord, OAuth, tunnel or archive secrets.
     const toolEnv = Object.fromEntries(Object.entries(env).filter(([key]) => /^(PATH|HOME|USER|LOGNAME|LANG|LC_ALL|TMPDIR|TMP|TEMP|NODE_EXTRA_CA_CERTS|HTTPS_PROXY|HTTP_PROXY|NO_PROXY|npm_config_cache|NPM_CONFIG_CACHE)$/.test(key)));
-    const npm = (cwd, args) => {
-        try { run('npm', args, { cwd, env: toolEnv, stdio: 'inherit', timeout: 300_000, shell: false }); }
-        catch { throw failure('Preparazione npm fallita. Controlla l’errore sopra, rete, spazio disco e runtime; il bot non è stato avviato. Riprova con un riavvio.'); }
+    const npm = async (cwd, args) => {
+        try { await run('npm', args, { cwd, env: toolEnv, timeout: 300_000, shell: false, signal }); }
+        catch { signal?.throwIfAborted(); throw failure('Preparazione npm fallita. Controlla rete, spazio disco e runtime; il bot non è stato avviato. Riprova con un riavvio.'); }
     };
     const fingerprint = hash(fs.readFileSync(path.join(root, 'package-lock.json')) + fs.readFileSync(path.join(root, 'package.json')) + `${process.version}/${process.platform}/${process.arch}`);
     const stamp = path.join(root, 'node_modules', '.tickets-prepared');
@@ -36,7 +61,8 @@ function prepare(root = __dirname, { run = execFileSync, env = process.env, log 
     if (!matches(stamp, fingerprint) || required.some(name => !fs.existsSync(path.join(root, 'node_modules', name, 'package.json')))
         || !fs.existsSync(path.join(root, 'node_modules/better-sqlite3/build/Release/better_sqlite3.node'))) {
         log('[startup] Installazione dipendenze bot…');
-        npm(root, ['ci', '--include=dev', '--no-audit', '--no-fund']);
+        await npm(root, ['ci', '--include=dev', '--no-audit', '--no-fund']);
+        signal?.throwIfAborted();
         fs.writeFileSync(stamp, fingerprint);
     }
     log('[startup] Dipendenze bot e pannello precompilato pronti.');
@@ -65,23 +91,25 @@ function configureSecrets(root = __dirname, env = process.env) {
     Object.assign(env, values);
 }
 
-async function downloadVerified(url, file, sha256, fetchImpl = fetch) {
+async function downloadVerified(url, file, sha256, fetchImpl = fetch, signal) {
     const temporary = `${file}.${randomBytes(6).toString('hex')}.part`;
     try {
-        const response = await fetchImpl(url, { signal: AbortSignal.timeout(120_000) });
+        const combinedSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000);
+        const response = await fetchImpl(url, { signal: combinedSignal });
         if (!response.ok || !response.body) throw failure('Download cloudflared fallito; riprova al prossimo riavvio.');
         const digest = createHash('sha256'); let bytes = 0;
         await pipeline(Readable.fromWeb(response.body), new Transform({ transform(chunk, _encoding, callback) {
             bytes += chunk.length;
             if (bytes > 128 * 1024 * 1024) return callback(failure('Download cloudflared troppo grande.'));
             digest.update(chunk); callback(null, chunk);
-        } }), fs.createWriteStream(temporary, { mode: 0o600, flags: 'wx' }));
+        } }), fs.createWriteStream(temporary, { mode: 0o600, flags: 'wx' }), { signal: combinedSignal });
         if (digest.digest('hex') !== sha256) throw failure('Checksum cloudflared non valido; binario scartato, avvio interrotto.');
         fs.chmodSync(temporary, 0o700); fs.renameSync(temporary, file);
     } finally { fs.rmSync(temporary, { force: true }); }
 }
 
-async function ensureConnector(root = __dirname, env = process.env, { fetchImpl = fetch, platform = process.platform, arch = process.arch, log = console.log } = {}) {
+async function ensureConnector(root = __dirname, env = process.env, { fetchImpl = fetch, platform = process.platform, arch = process.arch, log = console.log, signal } = {}) {
+    signal?.throwIfAborted();
     if (env.TUNNEL_TOKEN && /\s/.test(env.TUNNEL_TOKEN)) throw failure('TUNNEL_TOKEN deve contenere solo il token del connector, senza spazi o comando di installazione.');
     if (!env.TUNNEL_TOKEN || env.CLOUDFLARED_PATH) return;
     const artifact = CONNECTORS[arch];
@@ -91,8 +119,8 @@ async function ensureConnector(root = __dirname, env = process.env, { fetchImpl 
     const file = path.join(dir, `cloudflared-${VERSION}-${artifact.name}`);
     if (!fs.existsSync(file) || hash(fs.readFileSync(file)) !== artifact.sha256) {
         log(`[startup] Download cloudflared ${VERSION} verificato con SHA256…`);
-        try { await downloadVerified(`https://github.com/cloudflare/cloudflared/releases/download/${VERSION}/cloudflared-linux-${artifact.name}`, file, artifact.sha256, fetchImpl); }
-        catch (error) { if (error.startup) throw error; throw failure('Download cloudflared non riuscito. Verifica accesso a GitHub e riprova al riavvio.'); }
+        try { await downloadVerified(`https://github.com/cloudflare/cloudflared/releases/download/${VERSION}/cloudflared-linux-${artifact.name}`, file, artifact.sha256, fetchImpl, signal); }
+        catch (error) { signal?.throwIfAborted(); if (error.startup) throw error; throw failure('Download cloudflared non riuscito. Verifica accesso a GitHub e riprova al riavvio.'); }
     }
     fs.chmodSync(file, 0o700);
     env.CLOUDFLARED_PATH = file;

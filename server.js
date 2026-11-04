@@ -202,7 +202,9 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger 
             if (checking) return; checking = true;
             try {
                 const current = await new Promise((resolve, reject) => store.get(entry.sessionId, (error, data) => error ? reject(error) : resolve(data)));
+                if (closed) return;
                 await authorized(current);
+                if (closed) return;
                 if (res.writableLength > 64 * 1024) return close();
                 res.write(': heartbeat\n\n');
             } catch (error) {

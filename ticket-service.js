@@ -283,6 +283,7 @@ class TicketService extends EventEmitter {
             const ticket = this.store.get(thread.id);
             if (!ticket || ticket.contentExcluded || (ticket.expiresAt && ticket.expiresAt <= Date.now())) break;
             const messages = await thread.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+            if (this.stopping) return;
             if (!messages.size) break;
             for (const message of messages.values()) await this.handleMessage(message);
             before = messages.last().id;
@@ -305,15 +306,18 @@ class TicketService extends EventEmitter {
         try {
             const parents = new Map();
             for (const parentId of this.settings.ticketParentIds || [this.settings.ticketParentId]) {
+            if (this.stopping) return;
             let parent;
             try {
                 parent = await this.client.channels.fetch(parentId, { force: true });
+                if (this.stopping) return;
                 if (!parent || parent.guildId !== this.settings.guildId) throw new Error('Ticket parent not available.');
             } catch (error) { addFailure('parent-scan', { parentId }, error); throw error; }
             parents.set(parentId, parent);
             let active;
             try { active = await parent.threads.fetchActive(); }
             catch (error) { addFailure('active-inventory', { parentId }, error); throw error; }
+            if (this.stopping) return;
             for (const thread of active.threads.values()) this.recordThread(thread);
             let before;
             let hasMore = true;
@@ -322,6 +326,7 @@ class TicketService extends EventEmitter {
                 let page;
                 try { page = await this.client.rest.get(`/channels/${parent.id}/threads/archived/private`, { query }); }
                 catch (error) { addFailure('archive-inventory', { parentId }, error); throw error; }
+                if (this.stopping) return;
                 for (const thread of page.threads) this.recordThread({ ...thread, guild_id: this.settings.guildId });
                 hasMore = page.has_more && page.threads.length > 0;
                 const next = page.threads.at(-1)?.thread_metadata.archive_timestamp;
@@ -331,14 +336,18 @@ class TicketService extends EventEmitter {
             }
             let failures = 0;
             for (const ticket of this.store.all()) {
+                if (this.stopping) return;
                 if (ticket.status === 'deleted') continue;
                 const canConfirmDeletion = parents.get(ticket.parentId)?.permissionsFor(this.client.user)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageThreads]);
                 try {
                     const thread = await this.thread(ticket.threadId);
+                    if (this.stopping) return;
                     this.recordThread(thread);
                     const latest = await thread.messages.fetch({ limit: 1 });
+                    if (this.stopping) return;
                     if (latest.first()) await this.handleMessage(latest.first());
                 } catch (error) {
+                    if (this.stopping) return;
                     if (canConfirmDeletion && unknownChannel(error)) {
                         this.store.clearMessages(ticket.threadId);
                         this.store.upsert({ threadId: ticket.threadId, deletedAt: Date.now(), description: null });
@@ -349,6 +358,7 @@ class TicketService extends EventEmitter {
             if (failures || this.legacyIncomplete) throw new Error('Some ticket sources could not be reconciled.');
             this.setSync({ ready: true, updatedAt: Date.now(), error: null });
         } catch (error) {
+            if (this.stopping) return;
             if (!failureDetails.length) addFailure('reconcile', {}, error);
             this.logger.error('Ticket reconciliation failed.', { legacyIncomplete: this.legacyIncomplete, failures: failureDetails });
             this.setSync({ ready: false, error: 'Discord synchronization is incomplete. The dashboard shows the latest available data.' });
@@ -362,7 +372,7 @@ class TicketService extends EventEmitter {
         this.summaryPending = true;
         if (!this.summaryTimer && !this.summaryRunning) this.summaryTimer = setTimeout(() => {
             this.summaryTimer = null;
-            this.updateSummary().catch(error => this.logger.error('Summary update failed.', { code: error.code }));
+            this.summaryTask = this.updateSummary().catch(error => { if (!this.stopping) this.logger.error('Summary update failed.', { code: error.code }); });
         }, 1000);
     }
 

@@ -8,7 +8,7 @@ function startTunnel(settings, { spawnImpl = spawn, logger = console } = {}) {
     if (!['auto', 'http2', 'quic'].includes(settings.tunnelProtocol)) throw new Error('Invalid TUNNEL_PROTOCOL.');
     const executable = path.resolve(settings.cloudflaredPath);
     if (spawnImpl === spawn) accessSync(executable, constants.X_OK);
-    let child; let timer; let stopping = false; let delay = 1000;
+    let child; let timer; let stopping = false; let stopPromise; let delay = 1000;
     const launch = () => {
         if (stopping) return;
         const env = { TUNNEL_TOKEN: settings.tunnelToken, ...(process.env.PATH ? { PATH: process.env.PATH } : {}) };
@@ -23,14 +23,16 @@ function startTunnel(settings, { spawnImpl = spawn, logger = console } = {}) {
         child.once('error', restart); child.once('exit', restart);
     };
     launch();
-    return { stop: async () => {
+    return { stop: () => {
+        if (stopPromise) return stopPromise;
         stopping = true; clearTimeout(timer);
-        if (!child || child.exitCode !== null || child.signalCode) return;
-        await new Promise(resolve => {
+        if (!child || child.exitCode !== null || child.signalCode) return Promise.resolve();
+        stopPromise = new Promise(resolve => {
             const force = setTimeout(() => child.kill('SIGKILL'), 5000);
             child.once('exit', () => { clearTimeout(force); resolve(); });
             if (!child.kill('SIGTERM')) { clearTimeout(force); resolve(); }
         });
+        return stopPromise;
     } };
 }
 module.exports = { startTunnel };

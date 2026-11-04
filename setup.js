@@ -21,7 +21,8 @@ function validIds(clientId, ownerId) {
     return /^\d{16,22}$/.test(clientId) && /^\d{16,22}$/.test(ownerId);
 }
 
-async function configureDeployment(root = __dirname, env = process.env, { input = process.stdin, output = process.stdout } = {}) {
+async function configureDeployment(root = __dirname, env = process.env, { input = process.stdin, output = process.stdout, signal } = {}) {
+    signal?.throwIfAborted();
     const filename = path.join(root, FILE);
     let saved = {};
     if (fs.existsSync(filename)) {
@@ -44,11 +45,14 @@ async function configureDeployment(root = __dirname, env = process.env, { input 
     }
 
     const rl = readline.createInterface({ input, output, terminal: false });
+    const abort = () => rl.close();
+    signal?.addEventListener('abort', abort, { once: true });
     const lines = rl[Symbol.asyncIterator]();
     const ask = async (label, validate, message) => {
         for (;;) {
             output.write(`${label}\n> `);
             const line = await lines.next();
+            signal?.throwIfAborted();
             if (line.done) { rl.close(); throw startupError('Configurazione interrotta: input console chiuso. Configura .env oppure riavvia con la console disponibile.'); }
             const value = line.value.trim();
             const parsed = validate(value);
@@ -74,7 +78,7 @@ async function configureDeployment(root = __dirname, env = process.env, { input 
         fs.chmodSync(filename, 0o600);
         Object.assign(env, { PUBLIC_BASE_URL: publicBaseUrl, CLIENT_ID: clientId, OWNER_ID: ownerId });
         missingSecrets(env, true);
-    } finally { rl.close(); }
+    } finally { signal?.removeEventListener('abort', abort); rl.close(); }
 }
 
 function startupError(message) {

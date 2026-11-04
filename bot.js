@@ -20,7 +20,8 @@ function row(...buttons) { return new ActionRowBuilder().addComponents(buttons);
 function button(id, label, style = ButtonStyle.Secondary) { return new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style); }
 function link(url, label) { return new ButtonBuilder().setStyle(ButtonStyle.Link).setURL(url).setLabel(label); }
 
-async function main() {
+async function main({ signal, onShutdown = () => {} } = {}) {
+    signal?.throwIfAborted();
     const config = require('./config.json');
     const settings = loadSettings(process.env, config);
     if (!settings.discordToken) throw new Error('Configure DISCORD_TOKEN before starting the bot.');
@@ -40,10 +41,20 @@ async function main() {
     const service = new TicketService(client, store, settings, { logger });
     const app = createApp({ service, settings, logger });
     const http = app.listen(settings.port, settings.host);
-    let tunnel; let initialized = false; let interval; let retentionInterval; let shuttingDown = false;
+    let tunnel; let initialized = false; let interval; let retentionInterval; let shutdownPromise; let shuttingDown = false;
+    const cancellation = new AbortController();
+    const tasks = new Set();
+    const track = (work, label) => {
+        if (shuttingDown) return;
+        const task = Promise.resolve().then(() => { if (!shuttingDown) return work(); }).catch(error => {
+            if (!shuttingDown) logger.error(label, error);
+        }).finally(() => tasks.delete(task));
+        tasks.add(task);
+        return task;
+    };
     const purgeLegacy = id => { const key = `ticket_${id}`; if (legacy.has(key)) legacy.delete(key); };
     store.on('purged', purgeLegacy);
-    const event = (name, handler) => client.on(name, (...args) => Promise.resolve().then(() => handler(...args)).catch(error => logger.error(`Discord ${name} handler failed.`, error)));
+    const event = (name, handler, once = false) => client[once ? 'once' : 'on'](name, (...args) => track(() => handler(...args), `Discord ${name} handler failed.`));
     const privacyText = `Privacy and deletion: info@devs.beer${settings.publicBaseUrl ? `\n${settings.publicBaseUrl}/privacy` : '\nThe public HTTPS privacy URL is not configured yet.'}`;
 
     async function replyError(interaction, error) {
@@ -181,9 +192,10 @@ async function main() {
     event(Events.ShardReconnecting, () => service.setSync({ ready: false, error: 'Reconnecting to Discord.' }));
     event(Events.ShardResume, () => initialized && service.reconcile());
     event(Events.Error, error => logger.error('Discord client error.', error));
-    client.once(Events.ClientReady, async () => {
+    event(Events.ClientReady, async () => {
         try {
             const guild = await client.guilds.fetch(settings.guildId);
+            cancellation.signal.throwIfAborted();
             const commands = [
                 new SlashCommandBuilder().setName('ticket-panel').setDescription('Create the private ticket panel.').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
                 new SlashCommandBuilder().setName('privacy').setDescription('Privacy, web-copy exclusion and local data deletion.'),
@@ -191,18 +203,21 @@ async function main() {
                 new SlashCommandBuilder().setName('rename').setDescription('Rename a ticket or channel.'),
                 ...['close', 'lock', 'escalate'].map(name => new SlashCommandBuilder().setName(name).setDescription(`${name === 'close' ? 'Close the ticket' : name === 'lock' ? 'Close and lock the ticket' : 'Escalate the ticket to the owner'}.`).addStringOption(option => option.setName('reason').setDescription('Reason').setMaxLength(500))),
             ];
-            for (const command of commands) await guild.commands.create(command);
+            for (const command of commands) { cancellation.signal.throwIfAborted(); await guild.commands.create(command); }
+            cancellation.signal.throwIfAborted();
             try { await refreshCreationPanels(client, settings, store); }
             catch (error) { logger.error('Ticket creation panel refresh failed; retry on restart.', { code: error.code }); }
+            cancellation.signal.throwIfAborted();
             if (!store.read('meta:legacy-complete')) {
-                const report = await importLegacy({ client, legacy, store, settings, channels: [config.channels.ticketsNotifications, config.channels.ticketsOpened], apply: true });
+                const report = await importLegacy({ client, legacy, store, settings, channels: [config.channels.ticketsNotifications, config.channels.ticketsOpened], apply: true, signal: cancellation.signal });
                 service.legacyIncomplete = report.errors > 0;
                 logger.info('Legacy import report.', report);
             }
             initialized = true;
             await service.reconcile();
+            cancellation.signal.throwIfAborted();
             retentionInterval = setInterval(() => store.expire(), 60_000);
-            interval = setInterval(() => service.reconcile().catch(error => logger.error('Periodic reconciliation failed.', error)), 15 * 60_000);
+            interval = setInterval(() => track(() => service.reconcile(), 'Periodic reconciliation failed.'), 15 * 60_000);
             service.scheduleSummary();
             if (settings.messageContentApproved) {
                 for (const ticket of store.all()) {
@@ -211,23 +226,49 @@ async function main() {
                     catch (error) { logger.error('Conversation backfill incomplete; retry on next startup.', error); }
                 }
             }
-            logger.info(service.sync.ready ? 'Private ticket service ready.' : 'Private ticket service running with incomplete synchronization.');
+            if (!shuttingDown) logger.info(service.sync.ready ? 'Private ticket service ready.' : 'Private ticket service running with incomplete synchronization.');
         } catch (error) {
+            if (shuttingDown) return;
             service.setSync({ ready: false, error: 'Startup or import is incomplete. Check configuration and permissions.' });
             logger.error('Ticket initialization failed.', error);
         }
-    });
-    async function shutdown() {
-        if (shuttingDown) return;
-        shuttingDown = true; clearInterval(interval); clearInterval(retentionInterval); service.stop(); app.locals.close();
-        await tunnel?.stop(); client.destroy();
-        await new Promise(resolve => { http.close(resolve); http.closeAllConnections(); });
-        legacy.close(); database.close();
+    }, true);
+    function shutdown() {
+        if (shutdownPromise) return shutdownPromise;
+        shuttingDown = true;
+        cancellation.abort();
+        signal?.removeEventListener('abort', abort);
+        clearInterval(interval); clearInterval(retentionInterval);
+        shutdownPromise = (async () => {
+            const results = await Promise.allSettled([
+                Promise.resolve().then(() => service.stop()),
+                Promise.resolve().then(() => app.locals.close()),
+                Promise.resolve().then(() => tunnel?.stop()),
+                Promise.resolve().then(() => client.destroy()),
+                Promise.resolve().then(() => new Promise((resolve, reject) => {
+                    http.close(error => error && error.code !== 'ERR_SERVER_NOT_RUNNING' ? reject(error) : resolve());
+                    http.closeIdleConnections();
+                })),
+            ]);
+            await Promise.allSettled([...tasks, service.summaryTask]);
+            for (const db of [legacy, database]) {
+                try { await db.close(); } catch (error) { results.push({ status: 'rejected', reason: error }); }
+            }
+            const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+            if (errors.length) throw new AggregateError(errors, 'Some services failed to stop.');
+        })();
+        return shutdownPromise;
     }
+    const abort = () => { shutdown().catch(error => logger.error('Runtime shutdown failed.', error)); };
+    onShutdown(shutdown);
+    signal?.addEventListener('abort', abort, { once: true });
     try {
+        signal?.throwIfAborted();
         await new Promise((resolve, reject) => { if (http.listening) resolve(); else { http.once('listening', resolve); http.once('error', reject); } });
+        signal?.throwIfAborted();
         tunnel = startTunnel(settings, { logger });
         await client.login(settings.discordToken);
+        signal?.throwIfAborted();
     } catch (error) { await shutdown(); throw error; }
     return { app, http, client, store, service, shutdown };
 }

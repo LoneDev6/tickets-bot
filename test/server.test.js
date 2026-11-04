@@ -244,6 +244,32 @@ test('a temporary stream authorization failure closes the stream without signing
     } finally { controller.abort(); }
 });
 
+test('shutdown does not write to an ended SSE response when a permission check finishes late', { timeout: 3000 }, async t => {
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    const f = await fixture(t); await f.login();
+    const response = await f.request('/api/events');
+    const reader = response.body.getReader();
+    await reader.read();
+    const member = await f.guild.members.fetch({ user: ids.user, force: true });
+    let release; let entered; let endedWrites = 0;
+    const checking = new Promise(resolve => { entered = resolve; });
+    f.guild.members.fetch = () => { entered(); return new Promise(resolve => { release = resolve; }); };
+    const prototype = require('node:http').ServerResponse.prototype;
+    const write = prototype.write;
+    t.mock.method(prototype, 'write', function (...args) {
+        if (this.writableEnded) endedWrites++;
+        return write.apply(this, args);
+    });
+    t.mock.timers.tick(15_000);
+    await checking;
+    f.app.locals.close();
+    assert.equal((await reader.read()).done, true);
+    release(member);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(endedWrites, 0);
+    assert.equal(f.service.listenerCount('tickets'), 0);
+});
+
 test('configuration rejects unsafe origins and cryptographic comparison handles unicode safely', () => {
     const config = { guild: ids.guild, channels: { tickets: ids.parent }, roles: { support_team: ids.role } };
     assert.throws(() => loadSettings({ PUBLIC_BASE_URL: 'http://public.example.com' }, config));
