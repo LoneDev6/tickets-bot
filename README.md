@@ -8,6 +8,8 @@ Runtime supportato: Node **20.19+ oppure 22.12+** (verificato localmente con 24.
 
 Su Pterodactyl, dopo aver pubblicato questa versione nel repository: **aggiorna con `git pull` e riavvia**. Non occorre aggiungere comandi npm allo startup dell'egg.
 
+L'egg HumbleServers configurato confronta `MAIN_FILE` con la stringa letterale `"*.js"`: impostare **Main File a `*.js`**, asterisco incluso e senza virgolette, per selezionare Node anziché ts-node. Il file è incluso nel repository; il `postinstall` lo ripristina automaticamente se manca nella copia locale, senza sovrascrivere un file esistente. Non serve installare ts-node.
+
 Il bootstrap usa solo moduli standard Node: installa le dipendenze bloccate dai lockfile, compila il pannello e scarica il connector quando serve. Controlla hash dei lockfile/sorgenti e runtime; un riavvio senza cambiamenti riusa dipendenze, build e binario. Se un passaggio fallisce, interrompe l'avvio e lo ritenta al riavvio successivo. Servono `npm`, filesystem persistente scrivibile, memoria sufficiente per la build e accesso HTTPS ai registry/GitHub. La preparazione iniziale può richiedere alcuni minuti: verificare il timeout di avvio dell'egg.
 
 Per sviluppo e verifica restano disponibili `npm ci`, `npm --prefix web ci`, `npm run build:web` e `npm test`. `npm start`, `node index.js` e il launcher `*.js` preparano automaticamente l'app; il modulo interno `bot.js` viene caricato solo dopo.

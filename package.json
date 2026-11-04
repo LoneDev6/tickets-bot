@@ -5,6 +5,7 @@
   "main": "index.js",
   "private": true,
   "scripts": {
+    "postinstall": "node scripts/prepare-launcher.js",
     "test": "node --test test/*.test.js",
     "start": "node .",
     "dev": "nodemon index.js",
