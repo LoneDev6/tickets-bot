@@ -31,6 +31,8 @@ The panel is Operate: scan tickets, filter, read details, open Discord. Privacy 
 
 Use the generated neutral theme in `web/src/index.css`, including its semantic destructive, muted, border and focus-ring tokens. Do not add a palette.
 
+Follow the system light/dark preference with `prefers-color-scheme`, including changes while the page is open. Use the existing official shadcn dark tokens and Tailwind's default dark variant; native controls follow the same preference through the HTML color-scheme metadata.
+
 ## Typography
 
 Use the scaffold's Geist Variable font and shadcn text utilities. Dates use the Italian locale; historical unknown values are explicit.

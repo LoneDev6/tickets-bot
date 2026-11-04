@@ -58,6 +58,34 @@ test('403 errors keep existing tickets and do not prevent later records from rec
     service.stop();
 });
 
+test('reconcile logs bounded safe failures and a later clean pass clears the sync error', async () => {
+    const logs = [];
+    let denied = true;
+    const parent = { guildId: ids.guild, id: ids.parent, threads: { fetchActive: async () => ({ threads: new Collection() }) }, permissionsFor: () => ({ has: () => false }) };
+    const client = { user: { id: ids.bot }, channels: { fetch: async id => {
+        if (id === ids.parent) return parent;
+        if (denied) throw Object.assign(new Error('private response payload'), { code: 50001 });
+        return { ...thread(), id, messages: { fetch: async () => new Collection() } };
+    } }, rest: { get: async () => ({ threads: [], has_more: false }) } };
+    const store = new TicketStore(new Map(), randomBytes(32).toString('base64'));
+    const service = new TicketService(client, store, settings, { logger: { error: (...args) => logs.push(args), warn() {} } });
+    store.upsert({ ...thread(), threadId: ids.ticket });
+    service.legacyIncomplete = true;
+    await service.reconcile();
+    const [message, detail] = logs.at(-1);
+    assert.equal(message, 'Ticket reconciliation failed.');
+    assert.equal(detail.legacyIncomplete, true);
+    assert.equal(detail.failures[0].code, 50001);
+    assert.equal(detail.failures[0].threadId, ids.ticket);
+    assert(!JSON.stringify(detail).includes('private response payload'));
+    assert.equal(store.get(ids.ticket).status, 'open');
+    service.legacyIncomplete = false; denied = false;
+    await service.reconcile();
+    assert.equal(service.sync.ready, true);
+    assert.equal(service.sync.error, null);
+    service.stop();
+});
+
 test('summary updates recover an existing message and never duplicate it', async () => {
     let sends = 0; let edits = 0;
     const url = 'https://tickets.example.com';

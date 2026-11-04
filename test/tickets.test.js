@@ -108,3 +108,20 @@ test('server inventory discovers active and paginated private archives with no o
     assert.deepEqual(store.counts(), { open: 1, closed: 1, locked: 1, deleted: 0 });
     assert.equal(store.get(activeId).openerId, userId);
 });
+
+test('partial legacy import reports bounded safe errors and does not mark completion', async () => {
+    const badId = '120000000000000011';
+    const goodId = '120000000000000012';
+    const store = new TicketStore(new Map(), key);
+    const legacy = { indexes: [`ticket_${badId}`, `ticket_${goodId}`], get: key => key.endsWith(badId) ? null : { userId } };
+    const client = { user: { id: '120000000000000007' }, channels: { fetch: async () => { throw Object.assign(new Error('private response token'), { code: 50001, status: 403 }); } } };
+    const channels = Array.from({ length: 25 }, (_, i) => String(120000000000000100n + BigInt(i)));
+    const report = await importLegacy({ client, legacy, store, settings: { guildId: base.guildId, ticketParentId: base.parentId }, channels, apply: true });
+    assert.equal(report.errors, 26); assert.equal(report.errorDetails.length, 20);
+    assert.deepEqual(report.errorDetails[0], { stage: 'legacy-record', threadId: badId });
+    assert.equal(report.errorDetails[1].code, 50001);
+    assert.equal(report.errorDetails[1].status, 403);
+    assert(!JSON.stringify(report.errorDetails).includes('private response token'));
+    assert.equal(store.get(goodId).openerId, userId);
+    assert.equal(store.read('meta:legacy-complete'), null);
+});

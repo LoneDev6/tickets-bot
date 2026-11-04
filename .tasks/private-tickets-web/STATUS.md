@@ -1,6 +1,16 @@
 # Implementation checkpoint
 
-Aggiornato il 2026-11-04. Implementazione locale completata; nessun rilascio sul server reale. Piano e revisione iniziale descrivono la base `16d6484`, non il codice finale. Configurazione e procedure correnti: [README](../../README.md).
+Aggiornato il 2026-11-04. Implementazione pubblicata in Git; l'utente ha avviato il bot su HumbleServers e aperto il pannello. Il primo report live recupera 1480 ticket, con un errore di importazione ancora da identificare. Piano e revisione iniziale descrivono la base `16d6484`, non il codice finale. Configurazione e procedure correnti: [README](../../README.md).
+
+## Aggiornamento tema e diagnostica
+
+- Tema automatico secondo `prefers-color-scheme`, con i token scuri ufficiali shadcn e le varianti scure Tailwind; anche i controlli nativi seguono il sistema. Nessuna dipendenza o componente aggiunto. Nuovi asset precompilati inclusi per evitare build sul server.
+- Verifica browser sulla build con soli dati sintetici: desktop 1440×1000 e mobile 390×844 senza overflow; sfondo scuro `oklch(0.145 0 0)`, chiaro `oklch(1 0 0)`, passaggio in entrambe le direzioni senza nuova navigazione. Schermate visionate nella sessione; nessuna nuova cattura su disco. Scheda e fixture locale arrestate a fine controllo.
+- Gli errori di importazione includono ora sorgente, fase e codice/status numerici, massimo 20 dettagli ma conteggio completo. Riconciliazione: diagnostica solo delle sorgenti effettivamente fallite, con indicazione dell'import incompleto; nessun contenuto privato o messaggio grezzo degli errori. L'avviso resta finché Discord non è completamente sincronizzato.
+- Suite aggiornata: 33/33 test; copertura di import parziale, limite dettagli, redazione dei payload, conservazione ticket e recupero dopo riconciliazione fallita. Lint e build frontend superati; detector UI senza rilievi.
+- Il tunnel gestito `lonedev-tickets-web` e il DNS `tickets.devs.beer` sono configurati verso `http://127.0.0.1:7777`; token consegnato tramite file locale privato ignorato da Git. Autorizzazione account temporanea rimossa. Connessione connector, OAuth e SSE sul provider restano da verificare direttamente.
+
+La causa dell'errore live non è deducibile dal vecchio report: occorre il prossimo log dopo l'aggiornamento. La presenza di molti ticket nel pannello non certifica una scansione completa.
 
 ## Stato accettato
 

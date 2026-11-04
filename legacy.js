@@ -33,11 +33,18 @@ function parseCard(message, settings, botId) {
 
 async function importLegacy({ client, legacy, store, settings, channels, apply = false, retire = false }) {
     const candidates = new Map();
-    const report = { records: 0, cards: 0, untrustedCards: 0, activeThreads: 0, archivedThreads: 0, candidates: 0, imported: 0, existing: 0, suppressed: 0, errors: 0, retired: 0, open: 0, closed: 0, locked: 0, deleted: 0, missingOpener: 0, missingDescription: 0 };
+    const report = { records: 0, cards: 0, untrustedCards: 0, activeThreads: 0, archivedThreads: 0, candidates: 0, imported: 0, existing: 0, suppressed: 0, errors: 0, errorDetails: [], retired: 0, open: 0, closed: 0, locked: 0, deleted: 0, missingOpener: 0, missingDescription: 0 };
+    const recordError = (detail, error) => {
+        report.errors++;
+        if (report.errorDetails.length >= 20) return;
+        if (Number.isFinite(error?.code)) detail.code = error.code;
+        if (Number.isFinite(error?.status)) detail.status = error.status;
+        report.errorDetails.push(detail);
+    };
     for (const key of legacy.indexes.filter(value => /^ticket_\d{16,22}$/.test(value))) {
         const data = legacy.get(key);
         const threadId = key.slice(7);
-        if (!data || typeof data !== 'object') { report.errors++; continue; }
+        if (!data || typeof data !== 'object') { recordError({ stage: 'legacy-record', threadId }); continue; }
         candidates.set(threadId, {
             threadId, guildId: settings.guildId, parentId: settings.ticketParentId,
             openerId: data.userId || null, joinedUserIds: data.joinedUserIds || [],
@@ -72,7 +79,7 @@ async function importLegacy({ client, legacy, store, settings, channels, apply =
                 if (next === before) throw new Error('Legacy pagination did not advance.');
                 before = next;
             }
-        } catch { report.errors++; }
+        } catch (error) { recordError({ stage: 'card-scan', channelId, reason: 'unavailable-or-pagination' }, error); }
     }
     // Inventory active and archived threads independently of cards or local records.
     if (client.rest) for (const parentId of settings.ticketParentIds || [settings.ticketParentId]) {
@@ -106,7 +113,7 @@ async function importLegacy({ client, legacy, store, settings, channels, apply =
                 if (!next || next === before) throw new Error('Legacy archive pagination did not advance.');
                 before = next;
             }
-        } catch { report.errors++; }
+        } catch (error) { recordError({ stage: 'parent-inventory', parentId, reason: 'unavailable-or-pagination' }, error); }
     }
     report.candidates = candidates.size;
     for (const candidate of candidates.values()) {
@@ -140,7 +147,7 @@ async function importLegacy({ client, legacy, store, settings, channels, apply =
         if (apply) store.upsert(candidate, { imported: true });
         report.imported++;
     }
-    if (report.untrustedCards) report.errors++;
+    if (report.untrustedCards) recordError({ stage: 'untrusted-cards', reason: 'untrusted-card' });
     if (apply && !report.errors) store.write('meta:legacy-complete', { at: Date.now(), ...report });
     if (retire) {
         if (!apply || report.errors) throw new Error('Retirement requires a successful applied import. No legacy records deleted.');

@@ -207,19 +207,35 @@ class TicketService extends EventEmitter {
     async reconcile() {
         if (this.reconciling || this.stopping) return;
         this.reconciling = true;
+        const failureDetails = [];
+        const addFailure = (stage, ids, error) => {
+            if (failureDetails.length >= 20) return;
+            const detail = { stage, ...ids };
+            if (Number.isFinite(error?.code)) detail.code = error.code;
+            if (Number.isFinite(error?.status)) detail.status = error.status;
+            if (!('code' in detail) && !('status' in detail)) detail.reason = 'reconciliation-incomplete';
+            failureDetails.push(detail);
+        };
         try {
             const parents = new Map();
             for (const parentId of this.settings.ticketParentIds || [this.settings.ticketParentId]) {
-            const parent = await this.client.channels.fetch(parentId, { force: true });
-            if (!parent || parent.guildId !== this.settings.guildId) throw new Error('Ticket parent not available.');
+            let parent;
+            try {
+                parent = await this.client.channels.fetch(parentId, { force: true });
+                if (!parent || parent.guildId !== this.settings.guildId) throw new Error('Ticket parent not available.');
+            } catch (error) { addFailure('parent-scan', { parentId }, error); throw error; }
             parents.set(parentId, parent);
-            const active = await parent.threads.fetchActive();
+            let active;
+            try { active = await parent.threads.fetchActive(); }
+            catch (error) { addFailure('active-inventory', { parentId }, error); throw error; }
             for (const thread of active.threads.values()) this.recordThread(thread);
             let before;
             let hasMore = true;
             while (hasMore && !this.stopping) {
                 const query = new URLSearchParams({ limit: '100', ...(before ? { before } : {}) });
-                const page = await this.client.rest.get(`/channels/${parent.id}/threads/archived/private`, { query });
+                let page;
+                try { page = await this.client.rest.get(`/channels/${parent.id}/threads/archived/private`, { query }); }
+                catch (error) { addFailure('archive-inventory', { parentId }, error); throw error; }
                 for (const thread of page.threads) this.recordThread({ ...thread, guild_id: this.settings.guildId });
                 hasMore = page.has_more && page.threads.length > 0;
                 const next = page.threads.at(-1)?.thread_metadata.archive_timestamp;
@@ -240,14 +256,15 @@ class TicketService extends EventEmitter {
                     if (canConfirmDeletion && unknownChannel(error)) {
                         this.store.clearMessages(ticket.threadId);
                         this.store.upsert({ threadId: ticket.threadId, deletedAt: Date.now(), description: null });
-                    } else failures++;
+                    } else { failures++; addFailure('ticket-reconcile', { threadId: ticket.threadId, parentId: ticket.parentId }, error); }
                 }
             }
             this.store.expire();
             if (failures || this.legacyIncomplete) throw new Error('Some ticket sources could not be reconciled.');
             this.setSync({ ready: true, updatedAt: Date.now(), error: null });
         } catch (error) {
-            this.logger.error('Ticket reconciliation failed.', { code: error.code });
+            if (!failureDetails.length) addFailure('reconcile', {}, error);
+            this.logger.error('Ticket reconciliation failed.', { legacyIncomplete: this.legacyIncomplete, failures: failureDetails });
             this.setSync({ ready: false, error: 'Sincronizzazione Discord incompleta. I dati mostrati sono gli ultimi disponibili.' });
         } finally {
             this.reconciling = false;
