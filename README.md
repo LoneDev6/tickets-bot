@@ -79,13 +79,23 @@ La policy effettivamente servita è generata da [privacy.js](privacy.js) su `/pr
 
 Contatto: **info@devs.beer**. `/privacy` in Discord offre esclusione dalla copia web e cancellazione locale con conferma. Lo staff non deve chiedere password o token personali per identificare il richiedente. Restano preferenze minime protette per impedire che importazioni ricreino i dati esclusi.
 
-I nuovi record e messaggi usano AES-256-GCM con chiavi derivate distinte per cifratura e indici HMAC. Le sessioni, limitate e con scadenza, rimangono in RAM. Il bot non scrive più log privati su disco. **Vecchi `data/log.txt`, esportazioni e backup preesistenti non vengono automaticamente cifrati o eliminati**: devono essere gestiti prima di dichiarare nel form che tutti i dati conservati sono cifrati a riposo.
+I nuovi record e messaggi usano AES-256-GCM con chiavi derivate distinte per cifratura e indici HMAC. Le sessioni sono cifrate nel database e scadono dopo 30 giorni di inattività. Il bot non scrive più log privati su disco. **Vecchi `data/log.txt`, esportazioni e backup preesistenti non vengono automaticamente cifrati o eliminati**: devono essere gestiti prima di dichiarare nel form che tutti i dati conservati sono cifrati a riposo.
 
 Conservazione: ticket aperto più massimo 30 giorni dalla chiusura/blocco/archiviazione, salvo cancellazione anticipata. Un job controlla la scadenza ogni minuto e le API la applicano prima di restituire i ticket. Il termine comprende copie derivate e backup: configurare davvero scadenza, cancellazioni e ripristino; ripristinare un backup vecchio senza la lista aggiornata di esclusioni/cancellazioni può ripristinare dati che non devono tornare.
 
 `MESSAGE_CONTENT_APPROVED=false` è il valore iniziale. Il bot riceve solo metadati dei messaggi e non salva la conversazione completa. Dopo concessione e verifica dei requisiti, `true` abilita lettura/archivio, import della cronologia dei soli ticket, modifiche e cancellazioni. Gli allegati sono riferimenti, non copie binarie permanenti; i loro URL possono scadere.
 
-`WEB_CHAT_ENABLED=false` è indipendente: la raccolta delle conversazioni richiede `MESSAGE_CONTENT_APPROVED=true`, mentre la loro visibilità web richiede entrambi i flag a `true`. Le azioni staff abilitate dal pannello sono chiudere, chiudere e bloccare, riaprire, escalare e risolvere un’escalation; il pannello non invia risposte. L’escalation aggiunge al ticket privato il proprietario configurato in `OWNER_ID` e avvisa solo lui.
+`WEB_CHAT_ENABLED=false` è indipendente: la raccolta delle conversazioni richiede `MESSAGE_CONTENT_APPROVED=true`, mentre la loro visibilità web richiede entrambi i flag a `true`. Le azioni staff abilitate dal pannello sono chiudere, chiudere e bloccare, riaprire, escalare e risolvere un’escalation. Le risposte web restano disabilitate di default. L’escalation aggiunge al ticket privato il proprietario configurato in `OWNER_ID` e avvisa solo lui.
+
+### Risposte staff via webhook
+
+`WEB_REPLIES_ENABLED=false` è indipendente e rimane il valore iniziale. Il composer reale è disponibile solo con `MESSAGE_CONTENT_APPROVED=true`, `WEB_CHAT_ENABLED=true` e `WEB_REPLIES_ENABLED=true`; non impostare la prima variabile prima dell'autorizzazione Discord. Il bot deve poter vedere il thread privato e inviarvi messaggi, e avere **Manage Webhooks** sul canale padre.
+
+`POST /api/tickets/:id/reply` accetta soltanto `content` (1–2000 caratteri), con sessione staff, Origin e CSRF validi. Il server rilegge il membro Discord e usa il suo nome visualizzato e avatar del server, con fallback Discord al profilo globale. Il browser non sceglie nome, avatar, autore, destinazione o URL del webhook. Il webhook viene creato/riusato una volta per canale padre, appartiene al bot e spedisce solo al `threadId` autorizzato. Creazioni concorrenti sono condivise; nessun webhook per persona o per ticket. Non vengono abilitate menzioni automatiche di utenti o ruoli. Token e URL con token rimangono sul server.
+
+L'archivio cifrato conserva l'ID staff reale insieme al webhook, anche dopo eventi Gateway, modifiche e backfill; lo stesso ID permette attribuzione e cancellazione locale. Un webhook estraneo con nome simile non acquisisce questa attribuzione. I messaggi Discord restano messaggi webhook/app, non messaggi nativi dell'account personale. Invii e chiusure concorrenti dello stesso ticket sono bloccati; i ticket chiusi/bloccati/esclusi non vengono riaperti dall'invio. Se il webhook fallisce non viene spedita una copia con il bot né un messaggio nel canale padre.
+
+Riferimenti ufficiali: [Execute Webhook](https://github.com/discord/discord-api-docs/blob/main/developers/resources/webhook.mdx#execute-webhook), [Threads — Webhooks](https://github.com/discord/discord-api-docs/blob/main/developers/topics/threads.mdx#webhooks). L'API documenta `thread_id`, `username` e `avatar_url` per i thread in generale; il funzionamento con i permessi effettivi dei nostri thread privati richiede una verifica sul server Discord reale. Queste modifiche sono state provate con webhook simulati; non sono state attivate su Humble.
 
 ### Aggregate statistics API
 
@@ -116,13 +126,39 @@ Non inviare il form con prove inesistenti: risposte e requisiti in [.tasks/priva
 
 `npm test` usa database temporanei e un provider OAuth simulato, senza leggere token o dati reali. Include un ciclo completo con client Discord simulato in memoria: import storico, creazione, autorizzazioni, stati, messaggio riepilogativo unico, edit/delete, opt-out e cancellazione senza reimport. Per eseguire solo i test del servizio: `node --test test/service.test.js`. Queste simulazioni non verificano il protocollo Gateway, i permessi effettivi e i limiti del servizio Discord: quelli richiedono una guild di prova reale.
 
-Per una verifica visuale manuale, dopo la build:
+Per sviluppare e provare il pannello con dati mock, installare una volta le dipendenze frontend (`npm --prefix web ci`), poi:
+
+```sh
+npm run mock
+```
+
+Aprire `http://127.0.0.1:4173/fixture/login`. Per gli altri dispositivi della propria rete Tailscale:
+
+```sh
+npm run mock:tailscale
+```
+
+Il comando usa l’ingresso HTTPS privato Tailscale già configurato: su questo PC è `https://fisso.tail1d020c.ts.net:9443/fixture/login`, che inoltra a `127.0.0.1:8766`. Frontend e backend ascoltano solo su loopback; Tailscale gestisce HTTPS e IPv4/IPv6. Gli altri PC devono avere Tailscale connesso e poter raggiungere questo dispositivo secondo le ACL della rete. Usare l’URL stampato, compreso il nome host, affinché il controllo Origin delle azioni corrisponda. La fixture verifica la rotta Serve attesa e rifiuta una rotta con Funnel pubblico; non modifica la configurazione Tailscale.
+
+Vite serve i sorgenti React e applica HMR: modificare `web/src/` per vedere subito il risultato, senza build o deploy. Il pulsante Sign in with Discord esegue un login simulato locale. Sono disponibili 32 ticket sintetici, utenti/avatar di esempio, tutti gli stati e date dell’ultimo messaggio indipendenti dall’importazione; azioni e aggiornamenti live operano soltanto sui dati in memoria. Riavviare per ripristinare i ticket. `.env`, token reali, bot Discord e tunnel Cloudflare non vengono caricati.
+
+La chat mock è attiva di default in modalità `--dev`, con [Skyra Discord Components](https://github.com/skyra-project/discord-components) e [Discord Markdown Parser](https://github.com/ItzDerock/discord-markdown-parser): avatar, markdown, risposte, reazioni, embed e allegati sintetici. Il primo ticket contiene 64 messaggi per provare lo storico. **Send message** (o Invio) riceve una risposta simulata dopo circa un secondo; **Simulate incoming** permette di provare l'arrivo di nuovi messaggi. SSE aggiorna le altre sessioni aperte senza ricaricare il documento. `UI_FIXTURE_CHAT=false npm run mock:tailscale` nasconde la chat; per la fixture precompilata abilitarla con `UI_FIXTURE_CHAT=true`. L’invio staff attraversa lo stesso endpoint `/api/tickets/:id/reply` e lo stesso servizio di produzione, con un webhook Discord simulato; le altre API mock sono registrate soltanto dalla fixture di sviluppo. La fixture abilita i tre flag solo nel proprio processo e non modifica `.env`, intent o configurazione di produzione.
+
+I ticket con nuovi messaggi hanno sfondo azzurro chiaro e badge **Unread**, condivisi dallo staff. La lettura viene confermata solo quando l'ultimo messaggio è visibile nella chat e la scheda è attiva; scorrere lo storico non segna come letto un messaggio più recente. Se la chat web non è disponibile, **Mark as read** permette la conferma manuale dopo aver letto in Discord. Vengono conservati solo data e ID del messaggio letto, senza registrare l'identità del lettore. Le conferme non cambiano la data dell'ultimo messaggio.
+
+Fermare con Ctrl+C nel terminale che ha avviato il comando. `UI_FIXTURE_PORT` cambia la porta locale (4173 per mock locale, 8766 per Tailscale). `UI_FIXTURE_HTTPS_PORT` cambia la porta HTTPS Tailscale (9443); in quel caso la rotta Serve deve già puntare alla porta locale scelta. L’ingresso HTTPS già configurato resta disponibile dopo l’arresto del mock, ma risponderà solo quando il suo backend è avviato. Per verificare login, CSRF, azioni e isolamento dei file: `npm run test:mock`.
+
+La chat usa un unico pannello con intestazione e composer fissi: **Invio** spedisce, **Maiusc+Invio** inserisce una nuova riga. I refresh live non inseriscono avvisi nel layout; mantengono focus, bozza, messaggi già caricati e posizione nello storico. I messaggi in arrivo scorrono in basso solo se si sta leggendo il fondo; altrimenti compare **New messages — jump to present**. Il caricamento dello storico termina prima di applicare un refresh live concorrente.
+
+Regressione browser ripetibile senza dipendenze aggiuntive: aprire un ticket mock, incollare `test/chat-ui.browser.js` nella console DevTools ed eseguire `await verifyTicketChat()`. La funzione rifiuta sessioni non mock. Simula rete lenta e invio fallito; verifica geometria a ogni frame, focus/bozze, invii duplicati, IME, testo multilinea, paginazione, lettura condivisa e recupero dopo errore. Ripetere su un ticket appena aperto per esercitare il cursore dello storico. La prova ripristina `fetch` al termine e aggiunge soltanto messaggi sintetici.
+
+La fixture precompilata rimane disponibile per le verifiche visuali dopo la build:
 
 ```sh
 NODE_ENV=development node test/ui-fixture.js
 ```
 
-Lo script stampa URL e PID, ascolta solo su loopback su porta temporanea e contiene solo dati sintetici. Aprire il suo `/fixture/login`; non è una modalità del bot di produzione. Fermarlo con Ctrl+C. Le prove nel browser non attestano accesso al server Discord reale o compatibilità HumbleServers.
+Senza `--dev`, lo script stampa URL e PID, ascolta solo su loopback su porta temporanea e usa `web/dist`. Aprire il suo `/fixture/login`. Le prove mock non attestano accesso al server Discord reale o compatibilità HumbleServers.
 
 ## Persistent sign-in
 

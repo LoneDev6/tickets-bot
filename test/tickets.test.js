@@ -102,7 +102,7 @@ test('public ticket resolves legacy opener names only for matching IDs without m
 test('cached Discord identity and avatar take precedence over saved ticket data', () => {
     const ticket = { ...base, openerName: 'Old Name', openerAvatarUrl: 'old-avatar' };
     const user = { globalName: 'Discord Name', username: 'username', displayAvatarURL: options => { assert.deepEqual(options, { extension: 'png', size: 64 }); return 'avatar-url'; } };
-    assert.deepEqual(publicTicket(ticket, user), { ...ticket, openerName: 'Discord Name', openerAvatarUrl: 'avatar-url', discordUrl: `https://discord.com/channels/${base.guildId}/${ticketId}`, recordedParticipantsOnly: true });
+    assert.deepEqual(publicTicket(ticket, user), { ...ticket, openerName: 'Discord Name', openerAvatarUrl: 'avatar-url', discordUrl: `https://discord.com/channels/${base.guildId}/${ticketId}`, recordedParticipantsOnly: true, unread: false });
     assert.equal(publicTicket(ticket, { username: 'Fallback' }).openerName, 'Fallback');
     assert.equal(publicTicket(ticket).openerAvatarUrl, null);
 });
@@ -138,6 +138,42 @@ test('latest-message ordering ignores import and staff updates and keeps unknown
     store.upsert({ threadId: older, lastMessageAt: 300 });
     assert.equal(store.list().tickets[0].threadId, older);
     assert.equal(store.get(unknown).lastMessageAt, null);
+});
+
+test('shared read watermark advances safely and leaves later messages unread', () => {
+    const store = new TicketStore(new Map(), key);
+    store.upsert({ ...base, lastMessageAt: 100, lastMessageId: '120000000000000010' });
+    store.upsert({ ...base, threadId: '120000000000000009', lastMessageAt: 100, lastMessageId: '120000000000000008' });
+    assert.equal(publicTicket(store.get(ticketId)).unread, true);
+    store.markRead(ticketId, { messageAt: 100, messageId: '120000000000000010' });
+    assert.equal(store.get(ticketId).teamReadAt, 100);
+    assert.equal(publicTicket(store.get(ticketId)).unread, false);
+    store.upsert({ threadId: ticketId, lastMessageAt: 101, lastMessageId: '120000000000000011' });
+    assert.equal(publicTicket(store.get(ticketId)).unread, true);
+    store.markRead(ticketId, { messageAt: 100, messageId: '120000000000000010' });
+    assert.equal(publicTicket(store.get(ticketId)).unread, true);
+    assert.equal(store.get(ticketId).teamReadAt, 100);
+    assert.equal(store.get(ticketId).lastMessageAt, 101);
+    assert.equal(store.list().tickets[0].threadId, ticketId);
+});
+
+test('same-time messages use message IDs and invalid or future read positions are rejected', () => {
+    const store = new TicketStore(new Map(), key);
+    store.upsert({ ...base, lastMessageAt: 100, lastMessageId: '120000000000000011' });
+    store.markRead(ticketId, { messageAt: 100, messageId: '120000000000000010' });
+    assert.equal(publicTicket(store.get(ticketId)).unread, true);
+    store.markRead(ticketId, { messageAt: 100, messageId: '120000000000000011' });
+    assert.equal(publicTicket(store.get(ticketId)).unread, false);
+    assert.throws(() => store.markRead(ticketId, { messageAt: 0 }), { status: 400 });
+    assert.throws(() => store.markRead(ticketId, { messageAt: 100, messageId: 'bad' }), { status: 400 });
+    assert.throws(() => store.markRead(ticketId, { messageAt: 101 }), { status: 409 });
+    assert.throws(() => store.markRead(ticketId, { messageAt: 100, messageId: '120000000000000012' }), { status: 409 });
+    assert.equal(publicTicket({ lastMessageAt: null }).unread, false);
+    store.upsert({ ...base, lastMessageAt: 101, lastMessageId: '10000000000000000' });
+    store.markRead(ticketId, { messageAt: 101, messageId: '9999999999999999' });
+    assert.equal(publicTicket(store.get(ticketId)).unread, true);
+    store.markRead(ticketId, { messageAt: 101, messageId: '10000000000000000' });
+    assert.equal(publicTicket(store.get(ticketId)).unread, false);
 });
 
 test('observed aggregate metrics are idempotent, encrypted, persistent and survive ticket retention', () => {

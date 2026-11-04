@@ -52,6 +52,7 @@ test('public privacy, staff OAuth, protected APIs, CSRF and disabled writes', as
     assert.equal((await f.login()).status, 302);
     const session = await (await f.request('/api/session')).json();
     assert.equal(session.user.id, ids.user); assert.equal(session.capabilities.canReply, false);
+    assert.equal((await f.request(`/api/mock/tickets/${ids.ticket}/messages`, { method: 'POST' })).status, 404);
     assert.equal((await f.request('/api/tickets?page=0')).status, 400);
     assert.equal((await f.request('/api/tickets?status[]=open')).status, 400);
     const list = await (await f.request('/api/tickets')).json();
@@ -62,6 +63,51 @@ test('public privacy, staff OAuth, protected APIs, CSRF and disabled writes', as
     assert.equal((await f.request('/auth/logout', { method: 'POST' })).status, 403);
     assert.equal((await f.request('/auth/logout', { method: 'POST', headers: { Origin: f.settings.publicBaseUrl, 'X-CSRF-Token': session.csrfToken } })).status, 204);
     assert.equal((await f.request('/api/tickets')).status, 401);
+});
+
+test('mock API registration is rejected outside development', () => {
+    assert.throws(() => createApp({ settings: { development: false }, configureMockApi: () => {} }), /Mock APIs require development mode/);
+});
+
+test('webhook reply API accepts only content and derives the staff actor from the protected session', async t => {
+    const f = await fixture(t); await f.login();
+    Object.assign(f.settings, { messageContentApproved: true, webChatEnabled: true, webRepliesEnabled: true });
+    const session = await (await f.request('/api/session')).json();
+    assert.equal(session.capabilities.canReply, true);
+    const calls = [];
+    f.service.reply = async (id, member, content) => { calls.push({ id, actor: member.id, content }); return '120000000000000099'; };
+    const headers = { Origin: f.settings.publicBaseUrl, 'X-CSRF-Token': session.csrfToken, 'Content-Type': 'application/json' };
+    const send = (body, extra = {}) => f.request(`/api/tickets/${ids.ticket}/reply`, { method: 'POST', headers: { ...headers, ...extra }, body: JSON.stringify(body) });
+    for (const forged of [{ username: 'Another staff' }, { avatarURL: 'https://untrusted.invalid/a.png' }, { actorId: '120000000000000999' }, { webhookURL: 'https://untrusted.invalid' }, { threadId: '120000000000000999' }]) {
+        assert.equal((await send({ content: 'Reply', ...forged })).status, 400);
+    }
+    assert.equal((await send({ content: 'Reply' }, { Origin: 'https://untrusted.invalid' })).status, 403);
+    assert.equal((await send({ content: 'Reply' }, { 'X-CSRF-Token': 'wrong' })).status, 403);
+    const response = await send({ content: 'Authenticated reply' });
+    assert.equal(response.status, 201);
+    assert.deepEqual(await response.json(), { messageId: '120000000000000099' });
+    assert.deepEqual(calls, [{ id: ids.ticket, actor: session.user.id, content: 'Authenticated reply' }]);
+    f.revoke();
+    assert.equal((await send({ content: 'Revoked' })).status, 403);
+    assert.equal(calls.length, 1);
+});
+
+test('staff can mark a ticket read only with the dashboard origin and CSRF token', async t => {
+    const f = await fixture(t); await f.login();
+    f.store.upsert({ threadId: ids.ticket, lastMessageAt: 100, lastMessageId: '120000000000000010' });
+    const session = await (await f.request('/api/session')).json();
+    const body = JSON.stringify({ messageAt: 100, messageId: '120000000000000010' });
+    const headers = { 'Content-Type': 'application/json', Origin: f.settings.publicBaseUrl, 'X-CSRF-Token': session.csrfToken };
+    assert.equal((await f.request(`/api/tickets/${ids.ticket}/read`, { method: 'POST', headers: { ...headers, 'X-CSRF-Token': 'wrong' }, body })).status, 403);
+    assert.equal((await f.request(`/api/tickets/${ids.ticket}/read`, { method: 'POST', headers: { ...headers, Origin: 'https://elsewhere.example' }, body })).status, 403);
+    assert.equal((await f.request(`/api/tickets/${ids.ticket}/read`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: f.settings.publicBaseUrl }, body })).status, 403);
+    const response = await f.request(`/api/tickets/${ids.ticket}/read`, { method: 'POST', headers, body });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.ticket.unread, false);
+    assert.equal(result.ticket.teamReadAt, 100);
+    f.revoke();
+    assert.equal((await f.request(`/api/tickets/${ids.ticket}/read`, { method: 'POST', headers, body })).status, 403);
 });
 
 test('distributed panel and its compiled assets are served without frontend tooling while ticket APIs remain protected', async t => {
@@ -207,6 +253,8 @@ test('configuration rejects unsafe origins and cryptographic comparison handles 
     assert.equal(loadSettings({ SUPPORT_TEAM_ROLE_ID: '784529945049038899' }, config).supportRoleId, '784529945049038899');
     assert.throws(() => loadSettings({ SUPPORT_TEAM_ROLE_ID: 'not-a-role' }, config));
     assert.equal(loadSettings({}, config).webChatEnabled, false);
+    assert.equal(loadSettings({}, config).webRepliesEnabled, false);
+    assert.throws(() => loadSettings({ WEB_REPLIES_ENABLED: 'yes' }, config));
     assert.throws(() => loadSettings({ WEB_CHAT_ENABLED: 'yes' }, config));
     assert.throws(() => loadSettings({ STATS_API_TOKEN: 'short' }, config));
 });

@@ -67,6 +67,23 @@ class TicketStore extends EventEmitter {
         return this.read(`t:${this.index(threadId)}`);
     }
 
+    markRead(threadId, { messageAt, messageId } = {}) {
+        if (!Number.isSafeInteger(messageAt) || messageAt <= 0 || (messageId != null && !ID.test(messageId))) {
+            throw Object.assign(new Error('Invalid read position.'), { status: 400 });
+        }
+        const ticket = this.get(threadId);
+        if (!ticket) throw Object.assign(new Error('Ticket not found.'), { status: 404 });
+        if (!(Number.isSafeInteger(ticket.lastMessageAt) && ticket.lastMessageAt > 0) || messageAt > ticket.lastMessageAt
+            || (messageId && ticket.lastMessageId && BigInt(messageId) > BigInt(ticket.lastMessageId))) {
+            throw Object.assign(new Error('Read position is ahead of the latest message.'), { status: 409 });
+        }
+        const previousAt = Number(ticket.teamReadAt) || 0;
+        const newer = messageAt > previousAt || (messageAt === previousAt && messageId != null
+            && (ticket.teamReadMessageId == null || BigInt(messageId) > BigInt(ticket.teamReadMessageId)));
+        if (!newer) return ticket;
+        return this.upsert({ threadId, teamReadAt: messageAt, teamReadMessageId: messageId ?? null });
+    }
+
     all() {
         return this.keys().filter(key => key.startsWith('t:')).map(key => this.read(key));
     }
@@ -90,7 +107,8 @@ class TicketStore extends EventEmitter {
             type: null, description: null, createdAt: null, archived: false, locked: false, deletedAt: null,
             statusChangedAt: time, lastMessageId: null, lastMessageAuthorId: null, lastMessageAuthorName: null,
             lastMessageAt: null, lastHumanMessageId: null, lastHumanMessageAuthorId: null,
-            lastHumanMessageAt: null, joinedUserIds: [], verificationThreadId: null, lastAction: null,
+            lastHumanMessageAt: null, teamReadAt: null, teamReadMessageId: null,
+            joinedUserIds: [], verificationThreadId: null, lastAction: null,
             imported, contentExcluded: false, escalatedAt: null, escalatedBy: null, escalationReason: null, ...previous, ...input,
         };
         record.status = ticketStatus(record);
@@ -152,6 +170,10 @@ class TicketStore extends EventEmitter {
         return this.keys().filter(key => key.startsWith(prefix)).map(key => this.read(key))
             .filter(message => !before || BigInt(message.id) < BigInt(before))
             .sort((a, b) => b.id.localeCompare(a.id, 'en', { numeric: true })).slice(0, limit);
+    }
+
+    message(threadId, messageId) {
+        return this.read(`${this.messagePrefix(threadId)}${this.index(messageId)}`);
     }
 
     saveMessage(threadId, message) {
@@ -250,6 +272,9 @@ function ticketOpenerName(ticket) {
 function publicTicket(ticket, user) {
     return {
         ...ticket,
+        unread: Number(ticket.lastMessageAt) > 0 && (Number(ticket.lastMessageAt) > (Number(ticket.teamReadAt) || 0)
+            || (Number(ticket.lastMessageAt) === Number(ticket.teamReadAt) && ticket.lastMessageId != null
+                && (ticket.teamReadMessageId == null || BigInt(ticket.lastMessageId) > BigInt(ticket.teamReadMessageId)))),
         openerName: user?.globalName || user?.username || ticketOpenerName(ticket),
         openerAvatarUrl: user?.displayAvatarURL?.({ extension: 'png', size: 64 }) || null,
         discordUrl: ticket.status === 'deleted' ? null : `https://discord.com/channels/${ticket.guildId}/${ticket.threadId}`,

@@ -12,7 +12,8 @@ function sameToken(a, b) {
     return typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
-function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger = console, staticDir = path.join(__dirname, 'web', 'dist') }) {
+function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger = console, staticDir = path.join(__dirname, 'web', 'dist'), configureMockApi }) {
+    if (configureMockApi && !settings.development) throw new Error('Mock APIs require development mode.');
     const serializeTicket = ticket => publicTicket(ticket, service.client.users?.cache?.get(ticket.openerId));
     const app = express();
     app.disable('x-powered-by');
@@ -168,6 +169,20 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger 
         await service.action(req.ticket.threadId, action, { id: req.session.user.id, guild }, reason.trim());
         res.json({ ticket: serializeTicket(service.store.get(req.ticket.threadId)) });
     }));
+    app.post('/api/tickets/:ticketId/read', csrf, (req, res, next) => {
+        try {
+            const { messageAt, messageId } = req.body || {};
+            const ticket = service.store.markRead(req.ticket.threadId, { messageAt, messageId });
+            res.json({ ticket: serializeTicket(ticket) });
+        } catch (error) { next(error); }
+    });
+    app.post('/api/tickets/:ticketId/reply', csrf, asyncRoute(async (req, res) => {
+        if (!service.capabilities().canReply) return res.status(409).json({ error: service.capabilities().reason });
+        if (!req.body || Object.keys(req.body).some(key => key !== 'content') || typeof req.body.content !== 'string' || !req.body.content.trim() || req.body.content.length > 2000) return res.status(400).json({ error: 'A reply must contain only content, between 1 and 2000 characters.' });
+        const guild = await service.client.guilds.fetch(settings.guildId);
+        const messageId = await service.reply(req.ticket.threadId, { id: req.session.user.id, guild }, req.body.content);
+        res.status(201).json({ messageId });
+    }));
     app.all('/api/tickets/:ticketId/:action', csrf, (_req, res) => res.status(409).json({ error: 'Replies are currently available in Discord.' }));
     app.get('/api/events', asyncRoute(async (req, res) => {
         if (streams.size >= 100 || [...streams].filter(item => item.sessionId === req.sessionID).length >= 3) return res.status(429).json({ error: 'Too many open connections.' });
@@ -199,6 +214,7 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger 
         service.on('tickets', invalidate); service.on('sync', sync); streams.add(entry);
         send('sync', service.sync); send('tickets', { revision: service.store.revision }); res.on('close', close);
     }));
+    if (configureMockApi) configureMockApi(app, csrf);
     app.use('/api', (_req, res) => res.status(404).json({ error: 'Endpoint not found.' }));
     if (existsSync(path.join(staticDir, 'index.html'))) {
         app.use(express.static(staticDir, { index: false, dotfiles: 'deny' }));

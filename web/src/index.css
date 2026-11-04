@@ -145,3 +145,74 @@
   from { transform: translateX(0); }
   to { transform: translateX(calc(-1 * var(--preview-overflow, 0px))); }
 }
+
+/* Match the Discord renderer's palette throughout the channel and composer. */
+.ticket-chat {
+  --chat-background: #fff;
+  --chat-header: #f2f3f5;
+  --chat-input: #ebedef;
+  --chat-text: #2e3338;
+  --chat-muted: #535961;
+  --chat-border: #dedede;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: clamp(20rem, calc(100dvh - 22rem), 42rem);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--chat-border);
+  border-radius: var(--radius-lg);
+  background: var(--chat-background);
+  color: var(--chat-text);
+  font-family: 'gg sans', 'Noto Sans', Whitney, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: 16px;
+}
+
+.ticket-chat[data-theme="dark"] {
+  --chat-background: #36393e;
+  --chat-header: #2f3136;
+  --chat-input: #40444b;
+  --chat-text: #dcddde;
+  --chat-muted: #b9bbbe;
+  --chat-border: #292b2f;
+}
+
+.ticket-chat-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 3rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--chat-border);
+  background: var(--chat-header);
+}
+
+.ticket-chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--chat-muted) var(--chat-background);
+}
+
+.ticket-chat-transcript { min-height: 100%; border: 0; }
+.ticket-chat-date { display: flex; align-items: center; gap: 0.5rem; margin-inline: 1rem; color: var(--chat-muted); font-size: 12px; }
+.ticket-chat-date::before, .ticket-chat-date::after { content: ''; height: 1px; flex: 1; background: var(--chat-border); }
+.ticket-chat-new { position: absolute; top: 0.5rem; left: 1rem; right: 1rem; z-index: 1; background: #5865f2; color: #fff; }
+.ticket-chat-new:hover { background: #4752c4; }
+.ticket-chat-composer { flex: none; padding: 0.75rem 1rem 0.5rem; }
+.ticket-chat-input-row { display: flex; align-items: end; gap: 0.5rem; padding: 0.25rem 0.5rem; border-radius: 0.5rem; background: var(--chat-input); }
+.ticket-chat-input-row:focus-within { outline: 2px solid #5865f2; outline-offset: 2px; }
+.ticket-chat .ticket-chat-input { min-height: 2.5rem; max-height: 8rem; resize: none; overflow-y: auto; border: 0; background: transparent; color: inherit; font: inherit; line-height: 1.5; box-shadow: none; }
+.ticket-chat .ticket-chat-input::placeholder { color: var(--chat-muted); opacity: 1; }
+.ticket-chat .ticket-chat-control { color: inherit; }
+.ticket-chat .ticket-chat-control:hover { background: var(--chat-input); color: inherit; }
+.ticket-chat-hint { display: flex; justify-content: space-between; gap: 0.5rem; min-height: 1.5rem; padding-top: 0.35rem; color: var(--chat-muted); font-size: 11px; }
+.ticket-chat-hint > span:first-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ticket-chat-hint > span:last-child { flex: none; }
+.ticket-chat-readonly { flex: none; padding: 0.75rem 1rem; border-top: 1px solid var(--chat-border); color: var(--chat-muted); font-size: 13px; }

@@ -1,5 +1,5 @@
 const { EventEmitter } = require('node:events');
-const { ChannelType, PermissionFlagsBits } = require('discord.js');
+const { ChannelType, PermissionFlagsBits, WebhookType } = require('discord.js');
 const { ID } = require('./tickets');
 
 function unknownChannel(error) {
@@ -25,6 +25,7 @@ class TicketService extends EventEmitter {
         this.sync = { ready: false, updatedAt: null, error: null };
         this.busyUsers = new Set();
         this.busyTickets = new Set();
+        this.webhookLookups = new Map();
         this.summaryTimer = null;
         this.summaryRunning = false;
         this.summaryPending = false;
@@ -40,8 +41,8 @@ class TicketService extends EventEmitter {
         const enabled = this.settings.messageContentApproved;
         return {
             canReadConversation: Boolean(enabled && this.settings.webChatEnabled), canArchiveConversation: enabled,
-            canReply: false, canManageTicket: true,
-            reason: !enabled ? 'Web chat is unavailable until Discord Message Content access is approved.' : !this.settings.webChatEnabled ? 'Web chat is disabled. Open this ticket in Discord.' : 'Replies are currently available in Discord.',
+            canReply: Boolean(enabled && this.settings.webChatEnabled && this.settings.webRepliesEnabled), canManageTicket: true,
+            reason: !enabled ? 'Web chat is unavailable until Discord Message Content access is approved.' : !this.settings.webChatEnabled ? 'Web chat is disabled. Open this ticket in Discord.' : !this.settings.webRepliesEnabled ? 'Web replies are disabled. Reply in Discord.' : 'Staff replies use a Discord webhook with your server name and avatar.',
         };
     }
 
@@ -68,9 +69,66 @@ class TicketService extends EventEmitter {
     }
 
     async staff(member) {
+        return Boolean(await this.staffProfile(member));
+    }
+
+    async staffProfile(member) {
         if (!member || member.guild?.id !== this.settings.guildId) return false;
         const fresh = await member.guild.members.fetch({ user: member.id, force: true });
-        return fresh.roles.cache.has(this.settings.supportRoleId);
+        return fresh.id === member.id && fresh.roles.cache.has(this.settings.supportRoleId) ? fresh : null;
+    }
+
+    async replyWebhook(parentId) {
+        if (this.webhookLookups.has(parentId)) return this.webhookLookups.get(parentId);
+        const lookup = (async () => {
+            const parent = await this.client.channels.fetch(parentId, { force: true });
+            if (parent.guildId !== this.settings.guildId || parent.type !== ChannelType.GuildText
+                || !parent.permissionsFor(this.client.user)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageWebhooks])) {
+                throw Object.assign(new Error('The bot needs View Channel and Manage Webhooks on the ticket parent.'), { status: 409 });
+            }
+            const hooks = await parent.fetchWebhooks();
+            const hook = hooks.find(item => item.type === WebhookType.Incoming && item.owner?.id === this.client.user.id && item.name === 'Ticket staff replies' && item.token);
+            return hook || parent.createWebhook({ name: 'Ticket staff replies', reason: 'Web dashboard staff replies' });
+        })().finally(() => this.webhookLookups.delete(parentId));
+        this.webhookLookups.set(parentId, lookup);
+        return lookup;
+    }
+
+    async reply(threadId, member, content) {
+        if (typeof content !== 'string' || !content.trim() || content.length > 2000) throw Object.assign(new Error('A reply must contain 1–2000 characters.'), { status: 400 });
+        if (!this.capabilities().canReply) throw Object.assign(new Error(this.capabilities().reason), { status: 409 });
+        if (this.busyTickets.has(threadId)) throw Object.assign(new Error('Another action is in progress for this ticket.'), { status: 409 });
+        this.busyTickets.add(threadId);
+        try {
+            const staff = await this.staffProfile(member);
+            if (!staff) throw Object.assign(new Error('Only authorized support staff may reply.'), { status: 403 });
+            const thread = await this.thread(threadId);
+            const ticket = this.store.get(threadId);
+            if (!ticket || ticket.contentExcluded || this.store.excluded(staff.id) || thread.archived || thread.locked || ticket.status !== 'open') throw Object.assign(new Error('This ticket is not open for web replies.'), { status: 409 });
+            if (!thread.permissionsFor(this.client.user)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessagesInThreads])) throw Object.assign(new Error('The bot cannot send messages in this private thread.'), { status: 409 });
+            const hook = await this.replyWebhook(thread.parentId);
+            if (hook.channelId !== thread.parentId || hook.guildId !== this.settings.guildId || hook.owner?.id !== this.client.user.id || hook.type !== WebhookType.Incoming) throw Object.assign(new Error('The ticket webhook does not belong to this bot and channel.'), { status: 409 });
+            // Execute Webhook can auto-unarchive: never knowingly reopen a ticket by sending.
+            const current = await this.thread(threadId);
+            if (current.archived || current.locked || this.store.get(threadId)?.status !== 'open' || this.store.get(threadId)?.contentExcluded) throw Object.assign(new Error('Reopen the ticket before replying.'), { status: 409 });
+            const name = staff.displayName || staff.user.globalName || staff.user.username;
+            const avatar = staff.displayAvatarURL({ size: 128 });
+            const sent = await hook.send({ content: content.trim(), username: name, avatarURL: avatar, threadId, allowedMentions: { parse: [], repliedUser: false } });
+            if (sent.channelId !== threadId || sent.webhookId !== hook.id || !ID.test(sent.id)) throw new Error('Unexpected webhook message destination.');
+            const attribution = { staffAuthorId: staff.id, authorName: name, authorAvatarUrl: avatar, webhookId: hook.id };
+            await this.handleMessage(sent, attribution);
+            const saved = this.store.message(threadId, sent.id);
+            if (saved) this.store.saveMessage(threadId, { ...saved, ...attribution, authorId: staff.id, bot: true });
+            const latest = this.store.get(threadId);
+            if (latest) this.store.upsert({ threadId, lastAction: { action: 'reply', actorId: this.store.excluded(staff.id) ? null : staff.id, messageId: sent.id, reason: null, at: Date.now() } });
+            return sent.id;
+        } catch (error) {
+            if (Number.isInteger(error.code)) {
+                this.logger.warn('Staff webhook reply failed.', { code: error.code, status: error.status || 503, threadId });
+                throw Object.assign(new Error('Discord webhook delivery is unavailable.'), { status: 503 });
+            }
+            throw error;
+        } finally { this.busyTickets.delete(threadId); }
     }
 
     async thread(threadId) {
@@ -176,22 +234,29 @@ class TicketService extends EventEmitter {
         return thread;
     }
 
-    async handleMessage(message) {
+    async handleMessage(message, staffAttribution) {
         const ticket = this.store.get(message.channelId);
         if (!ticket || ticket.status === 'deleted' || message.guildId !== this.settings.guildId || this.store.suppressed(message.channelId)) return;
-        if (this.store.excluded(message.author?.id)) {
+        const saved = staffAttribution || this.store.message(ticket.threadId, message.id);
+        const staffReply = saved?.staffAuthorId && saved.webhookId === message.webhookId ? saved : null;
+        const authorId = staffReply?.staffAuthorId || message.author?.id || null;
+        if (this.store.excluded(authorId)) {
             this.store.clearMessages(ticket.threadId);
             this.store.upsert({ threadId: ticket.threadId, contentExcluded: true, description: null });
             return;
         }
+        const authorName = ticket.contentExcluded && message.webhookId ? null : staffReply?.authorName || message.member?.displayName || message.author?.globalName || message.author?.username || null;
         const nowTicket = this.store.get(ticket.threadId);
         const update = { threadId: ticket.threadId };
-        if (!nowTicket.lastMessageId || BigInt(message.id) >= BigInt(nowTicket.lastMessageId)) Object.assign(update, { lastMessageId: message.id, lastMessageAuthorId: message.author?.id || null, lastMessageAuthorName: message.author?.username || null, lastMessageAt: message.createdTimestamp });
-        if (message.author && !message.author.bot && !message.system && (!nowTicket.lastHumanMessageId || BigInt(message.id) >= BigInt(nowTicket.lastHumanMessageId))) Object.assign(update, { lastHumanMessageId: message.id, lastHumanMessageAuthorId: message.author.id, lastHumanMessageAt: message.createdTimestamp });
+        if (!nowTicket.lastMessageId || BigInt(message.id) >= BigInt(nowTicket.lastMessageId)) Object.assign(update, { lastMessageId: message.id, lastMessageAuthorId: authorId, lastMessageAuthorName: authorName, lastMessageAt: message.createdTimestamp });
+        if (message.author && (!message.author.bot || staffReply) && !message.system && (!nowTicket.lastHumanMessageId || BigInt(message.id) >= BigInt(nowTicket.lastHumanMessageId))) Object.assign(update, { lastHumanMessageId: message.id, lastHumanMessageAuthorId: authorId, lastHumanMessageAt: message.createdTimestamp });
         if (Object.keys(update).length > 1) this.store.upsert(update);
         if (this.settings.messageContentApproved && !message.partial && !message.system) {
             this.store.saveMessage(ticket.threadId, {
-                id: message.id, authorId: message.author?.id || null, authorName: message.author?.username || null,
+                id: message.id, authorId, authorName,
+                authorAvatarUrl: staffReply?.authorAvatarUrl || message.member?.displayAvatarURL?.({ size: 128 }) || message.author?.displayAvatarURL?.({ size: 128 }) || null,
+                bot: Boolean(message.author?.bot), webhookId: message.webhookId || null,
+                ...(staffReply ? { staffAuthorId: staffReply.staffAuthorId } : {}),
                 content: message.content || '', createdAt: message.createdTimestamp, editedAt: message.editedTimestamp,
                 embeds: message.embeds.map(embed => ({ title: embed.title, description: embed.description, fields: embed.fields })),
                 attachments: [...message.attachments.values()].map(attachment => ({ id: attachment.id, name: attachment.name, url: attachment.url })),

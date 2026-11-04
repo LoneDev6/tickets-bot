@@ -13,8 +13,9 @@ export type Session = {
   capabilities: {
     canReadConversation: boolean
     canArchiveConversation: boolean
-    canReply: false
+    canReply: boolean
     canManageTicket: boolean
+    mockChat?: boolean
     reason: string
   }
   sync: SyncState
@@ -35,6 +36,10 @@ export type Ticket = {
   lastMessageAuthorId: string | null
   lastMessageAuthorName: string | null
   lastMessageAt: number | null
+  lastMessageId: string | null
+  unread: boolean
+  teamReadAt: number | null
+  teamReadMessageId: string | null
   joinedUserIds: string[]
   verificationThreadId: string | null
   lastAction: { action: string; reason: string | null; actorId: string | null; at: number | null } | null
@@ -66,8 +71,15 @@ export type TicketMessage = {
   content: string
   createdAt: number
   editedAt: number | null
-  attachments: { name: string; url: string }[]
-  embeds?: { title?: string | null; description?: string | null; fields?: { name: string; value: string }[] }[]
+  authorAvatarUrl?: string | null
+  authorRoleColor?: string | null
+  bot?: boolean
+  webhookId?: string | null
+  staffAuthorId?: string
+  replyTo?: { id: string; authorId: string; authorName: string; content: string; bot?: boolean }
+  reactions?: { emoji: string; count: number; reacted?: boolean }[]
+  attachments: { name: string; url: string; contentType?: string; size?: number }[]
+  embeds?: { title?: string | null; description?: string | null; url?: string; color?: number; image?: string; thumbnail?: string; footer?: { text: string; iconUrl?: string }; author?: { name: string; url?: string; iconUrl?: string }; fields?: { name: string; value: string; inline?: boolean }[] }[]
 }
 
 export type TicketMessages = {

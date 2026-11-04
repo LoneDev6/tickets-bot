@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import type { ComponentProps, MouseEvent, ReactNode } from "react"
 import { ArrowLeft, ExternalLink, LogOut, RefreshCw, Search, UserRound } from "lucide-react"
 import { ApiError, apiGet, apiPost, type PrivacyPolicy, type Session, type SyncState, type Ticket, type TicketList, type TicketMessage, type TicketMessages, type TicketStatus } from "@/api"
@@ -15,6 +15,9 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import type { ReadPosition } from "@/components/ticket-conversation"
+
+const TicketConversation = lazy(() => import("@/components/ticket-conversation").then(module => ({ default: module.TicketConversation })))
 
 type AuthState =
   | { state: "loading" }
@@ -529,8 +532,8 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
               <TableHeader><TableRow><TableHead>Ticket</TableHead><TableHead>Owner</TableHead><TableHead>Type</TableHead><TableHead>Status</TableHead><TableHead>Last message</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader>
               <TableBody>
                 {list.data.tickets.map((ticket) => (
-                  <TableRow key={ticket.threadId} className="cursor-pointer" onClick={openTicketRow}>
-                    <TableCell className="w-2/5 max-w-0"><TicketPreview ticket={ticket} href={hrefFor(ticket)} />{ticket.escalatedAt && <Badge variant="destructive" className="mt-2">Escalated</Badge>}</TableCell>
+                  <TableRow key={ticket.threadId} className={ticket.unread ? "cursor-pointer bg-sky-50 hover:bg-sky-100/60 dark:bg-sky-950/30 dark:hover:bg-sky-950/50" : "cursor-pointer"} onClick={openTicketRow}>
+                    <TableCell className="w-2/5 max-w-0"><TicketPreview ticket={ticket} href={hrefFor(ticket)} />{ticket.unread && <Badge variant="secondary" className="mr-2 mt-2">Unread</Badge>}{ticket.escalatedAt && <Badge variant="destructive" className="mt-2">Escalated</Badge>}</TableCell>
                     <TableCell><TicketOwner ticket={ticket} /></TableCell>
                     <TableCell>{ticketTypeLabel(ticket.type)}</TableCell>
                     <TableCell>{statusBadge(ticket.status)}</TableCell>
@@ -543,10 +546,10 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
           </div>
           <ul className="flex flex-col divide-y rounded-md border md:hidden" aria-label="Ticket list">
             {list.data.tickets.map((ticket) => (
-              <li key={ticket.threadId} className="min-w-0 cursor-pointer p-4 hover:bg-muted/50" onClick={openTicketRow}>
+              <li key={ticket.threadId} className={`min-w-0 cursor-pointer p-4 ${ticket.unread ? "bg-sky-50 hover:bg-sky-100/60 dark:bg-sky-950/30 dark:hover:bg-sky-950/50" : "hover:bg-muted/50"}`} onClick={openTicketRow}>
                 <TicketPreview ticket={ticket} href={hrefFor(ticket)} />
                 <div className="mt-3 text-sm text-muted-foreground"><TicketOwner ticket={ticket} /></div>
-                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">{statusBadge(ticket.status)}<Badge variant="outline">{ticketTypeLabel(ticket.type)}</Badge>{ticket.escalatedAt && <Badge variant="destructive">Escalated</Badge>}<span className="text-xs text-muted-foreground">Updated {formatDate(ticket.lastMessageAt)}</span></div>
+                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">{statusBadge(ticket.status)}<Badge variant="outline">{ticketTypeLabel(ticket.type)}</Badge>{ticket.unread && <Badge variant="secondary">Unread</Badge>}{ticket.escalatedAt && <Badge variant="destructive">Escalated</Badge>}<span className="text-xs text-muted-foreground">Updated {formatDate(ticket.lastMessageAt)}</span></div>
               </li>
             ))}
           </ul>
@@ -580,6 +583,16 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
   const [actionReason, setActionReason] = useState("")
   const [selectedAction, setSelectedAction] = useState<TicketAction | null>(null)
   const actionTrigger = useRef<HTMLButtonElement | null>(null)
+  const [readError, setReadError] = useState("")
+  const oldestLoadedMessageId = useRef<string | null>(null)
+  const markRead = useCallback(async (position: ReadPosition) => {
+    try {
+      await apiPost(`/api/tickets/${encodeURIComponent(id)}/read`, session.csrfToken, position)
+    } catch (error) {
+      if (error instanceof ApiError && [401, 403].includes(error.status)) onUnauthorized()
+      throw error
+    }
+  }, [id, session.csrfToken, onUnauthorized])
   const ticketRequestKey = `${id}|${revision}|${retry}`
   const messagesRequestKey = ticketRequestKey
   const ticketPending = ticket.requestKey !== ticketRequestKey
@@ -609,30 +622,48 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
   }, [id, ticketRequestKey, onUnauthorized])
 
   useEffect(() => {
-    if (!conversationAvailable) return
+    if (!conversationAvailable || messages.loadingMore) return
     const controller = new AbortController()
-    apiGet<TicketMessages>(`/api/tickets/${encodeURIComponent(id)}/messages`, controller.signal)
-      .then((data) => setMessages({ data: { ...data, messages: mergeMessages(data.messages) }, error: "", requestKey: messagesRequestKey, loadingMore: false, olderError: "" }))
+    async function refresh() {
+      let data = await apiGet<TicketMessages>(`/api/tickets/${encodeURIComponent(id)}/messages`, controller.signal)
+      const oldest = oldestLoadedMessageId.current
+      while (data.nextBefore && oldest && !data.messages.some(message => BigInt(message.id) <= BigInt(oldest))) {
+        const page = await apiGet<TicketMessages>(`/api/tickets/${encodeURIComponent(id)}/messages?before=${encodeURIComponent(data.nextBefore)}`, controller.signal)
+        data = { ...page, messages: mergeMessages(page.messages, data.messages) }
+      }
+      const ordered = mergeMessages(data.messages)
+      const retained = oldest ? ordered.filter(message => BigInt(message.id) >= BigInt(oldest)) : ordered
+      return { ...data, messages: retained, nextBefore: retained.length < ordered.length ? retained[0]?.id ?? null : data.nextBefore }
+    }
+    refresh()
+      .then((data) => {
+        if (controller.signal.aborted) return
+        const ordered = mergeMessages(data.messages)
+        oldestLoadedMessageId.current = ordered[0]?.id ?? null
+        setMessages(current => ({ data: { ...data, messages: ordered }, error: "", requestKey: messagesRequestKey, loadingMore: false, olderError: current.olderError }))
+      })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return
         if (error instanceof ApiError && [401, 403].includes(error.status)) onUnauthorized()
-        setMessages({ data: null, error: error instanceof Error ? error.message : "Connection error.", requestKey: messagesRequestKey, loadingMore: false, olderError: "" })
+        setMessages((current) => ({ ...current, error: error instanceof Error ? error.message : "Connection error.", requestKey: messagesRequestKey, loadingMore: false }))
       })
-    return () => {
-      controller.abort()
-      olderMessagesController.current?.abort()
-    }
-  }, [id, messagesRequestKey, conversationAvailable, onUnauthorized])
+    return () => controller.abort()
+  }, [id, messagesRequestKey, conversationAvailable, onUnauthorized, messages.loadingMore])
+
+  useEffect(() => () => olderMessagesController.current?.abort(), [id])
 
   async function loadOlderMessages() {
     const before = messages.data?.nextBefore
-    if (!before || messages.loadingMore) return
+    if (!before || messages.loadingMore || messagesPending) return
     const controller = new AbortController()
     olderMessagesController.current?.abort()
     olderMessagesController.current = controller
     setMessages((current) => ({ ...current, loadingMore: true, olderError: "" }))
     try {
       const page = await apiGet<TicketMessages>(`/api/tickets/${encodeURIComponent(id)}/messages?before=${encodeURIComponent(before)}`, controller.signal)
+      if (controller.signal.aborted) return
+      const oldest = mergeMessages(page.messages)[0]?.id
+      if (oldest) oldestLoadedMessageId.current = oldest
       setMessages((current) => {
         if (!current.data) return { ...current, data: page, loadingMore: false, olderError: "" }
         return { ...current, data: { ...page, messages: mergeMessages(page.messages, current.data.messages) }, loadingMore: false, olderError: "" }
@@ -640,7 +671,7 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
     } catch (error) {
       if (controller.signal.aborted) return
       if (error instanceof ApiError && [401, 403].includes(error.status)) onUnauthorized()
-      setMessages({ data: null, error: error instanceof Error ? error.message : "Connection error.", requestKey: messagesRequestKey, loadingMore: false, olderError: "" })
+      setMessages((current) => ({ ...current, loadingMore: false, olderError: error instanceof Error ? error.message : "Unable to load older messages." }))
     }
   }
 
@@ -667,10 +698,9 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
   if (item.escalatedAt) actions.push("resolve-escalation")
   else if (item.status === "open") actions.push("escalate")
   return (
-    <section className="flex flex-col gap-6" aria-labelledby="ticket-heading">
+    <section className="flex flex-col gap-6" aria-labelledby="ticket-heading" aria-busy={ticketPending}>
       <AppLink href={returnTo} className="inline-flex w-fit items-center gap-2 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"><ArrowLeft className="size-4" />Back to tickets</AppLink>
       {ticketError && <Alert variant="destructive"><AlertTitle>Ticket data may be out of date</AlertTitle><AlertDescription>{ticketError}</AlertDescription></Alert>}
-      {ticketPending && <p className="text-sm text-muted-foreground" role="status">Updating ticket…</p>}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">{statusBadge(item.status)}<Badge variant="outline">{ticketTypeLabel(item.type)}</Badge>{item.escalatedAt && <Badge variant="destructive">Escalated</Badge>}</div>
@@ -679,6 +709,7 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {discordHref ? <Button asChild variant="outline"><a href={discordHref} target="_blank" rel="noopener noreferrer">Open in Discord <span className="sr-only">opens in a new tab</span><ExternalLink /></a></Button> : <p className="text-sm text-muted-foreground">Discord link unavailable.</p>}
+          {item.unread && !conversationAvailable && <Button variant="outline" onClick={() => { setReadError(""); void markRead({ messageAt: item.lastMessageAt!, messageId: item.lastMessageId }).catch((error: unknown) => setReadError(error instanceof Error ? error.message : "Unable to mark as read.")) }}>Mark as read</Button>}
           {session.capabilities.canManageTicket && item.status !== "deleted" && actions.map((action) => <Button key={action} variant={action === "close-lock" ? "destructive" : "outline"} disabled={actionBusy} onClick={(event) => {
             actionTrigger.current = event.currentTarget
             setActionReason(""); setActionError(""); setActionNotice(""); setSelectedAction(action)
@@ -687,6 +718,7 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
       </div>
 
       {actionNotice && <p role="status" className="text-sm text-muted-foreground">{actionNotice}</p>}
+      {readError && <Alert variant="destructive"><AlertDescription>{readError}</AlertDescription></Alert>}
       {item.escalatedAt && <Alert variant="destructive"><AlertTitle>Escalated ticket</AlertTitle><AlertDescription>{item.escalationReason || "No escalation reason provided."}{item.escalatedBy ? ` · By ${item.escalatedBy}` : ""} · {formatDate(item.escalatedAt)}</AlertDescription></Alert>}
       <Dialog open={selectedAction !== null} onOpenChange={(open) => { if (!open && !actionBusy) { setSelectedAction(null); setActionReason(""); setActionError("") } }}>
         <DialogContent className="inset-0 h-dvh w-screen max-w-none translate-x-0 translate-y-0 grid-rows-[auto_1fr_auto] overflow-y-auto rounded-none p-6 sm:max-w-none" showCloseButton={!actionBusy} onEscapeKeyDown={(event) => { if (actionBusy) event.preventDefault() }} onCloseAutoFocus={(event) => {
@@ -704,6 +736,12 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
           <DialogFooter className="-mx-6 -mb-6 rounded-none p-6"><Button variant="outline" disabled={actionBusy} onClick={() => { setSelectedAction(null); setActionReason(""); setActionError("") }}>Cancel</Button><Button type="submit" form="ticket-action" variant={selectedAction === "close-lock" ? "destructive" : "default"} disabled={actionBusy}>{actionBusy ? "Updating…" : selectedAction ? actionLabels[selectedAction] : "Confirm"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {conversationAvailable && <section aria-label="Conversation" aria-busy={messagesPending} className="min-w-0">
+        {messages.data?.available ? <Suspense fallback={<Skeleton className="ticket-chat w-full" />}>
+          <TicketConversation ticket={item} session={session} messages={messages.data.messages} onRead={markRead} onUnauthorized={onUnauthorized} hasOlder={!!messages.data.nextBefore} loadingOlder={messages.loadingMore || messagesPending} onLoadOlder={loadOlderMessages} historyError={currentMessagesError || messages.olderError} />
+        </Suspense> : currentMessagesError ? <Alert variant="destructive"><AlertTitle>Conversation unavailable</AlertTitle><AlertDescription>{currentMessagesError}</AlertDescription></Alert> : messages.data ? <p className="text-sm text-muted-foreground">{messages.data.reason || "Conversation unavailable."}</p> : <Skeleton className="ticket-chat w-full" aria-label="Loading conversation" />}
+      </section>}
 
       <Card>
         <CardHeader><CardTitle>Initial message</CardTitle></CardHeader>
@@ -727,53 +765,12 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
           </dl>
         </CardContent>
       </Card>
-
-      {conversationAvailable && <Card>
-        <CardHeader><CardTitle>Conversation</CardTitle></CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {messagesPending && !messages.data ? <div className="flex flex-col gap-3" aria-label="Loading conversation" aria-busy="true"><Skeleton className="h-20 w-full" /><Skeleton className="h-20 w-4/5" /></div> : (
-            <>
-              {currentMessagesError && <Alert variant="destructive"><AlertTitle>Conversation unavailable</AlertTitle><AlertDescription>{currentMessagesError}</AlertDescription></Alert>}
-              {messagesPending && <p className="text-sm text-muted-foreground" role="status">Updating conversation…</p>}
-              {messages.data && !messages.data.available ? <p className="text-sm text-muted-foreground">{messages.data.reason || "Conversation unavailable."}</p> : messages.data?.messages.length ? (
-                <>
-                  {messages.olderError && <Alert variant="destructive"><AlertDescription>{messages.olderError}</AlertDescription></Alert>}
-                  {messages.data.nextBefore && <Button variant="outline" className="w-fit" onClick={loadOlderMessages} disabled={messages.loadingMore}>{messages.loadingMore ? "Loading…" : "Load older messages"}</Button>}
-                  <ol className="flex flex-col gap-4">{messages.data.messages.map((message) => <Message key={message.id} message={message} />)}</ol>
-                </>
-              ) : !currentMessagesError && <p className="text-sm text-muted-foreground">No messages available.</p>}
-            </>
-          )}
-          {session.capabilities.canReply && <><Separator /><p className="text-sm text-muted-foreground">Replies are not available in this dashboard.</p></>}
-        </CardContent>
-      </Card>}
     </section>
   )
 }
 
 function Metadata({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0"><dt className="text-muted-foreground">{label}</dt><dd className="mt-1 break-words font-medium">{value}</dd></div>
-}
-
-function Message({ message }: { message: TicketMessage }) {
-  return (
-    <li className="flex flex-col gap-2 rounded-md border p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <p className="font-medium">{message.authorName} <span className="font-normal text-muted-foreground">· {message.authorId}</span></p>
-        <p className="text-xs text-muted-foreground">{formatDate(message.createdAt)}{message.editedAt ? ` · edited ${formatDate(message.editedAt)}` : ""}</p>
-      </div>
-      {message.content && <p className="whitespace-pre-wrap break-words text-sm">{message.content}</p>}
-      {message.embeds?.map((embed, index) => <div key={`${message.id}-embed-${index}`} className="flex flex-col gap-2 text-sm">
-        {embed.title && <p className="font-medium">{embed.title}</p>}
-        {embed.description && <p className="whitespace-pre-wrap break-words">{embed.description}</p>}
-        {embed.fields?.map((field, fieldIndex) => <div key={`${message.id}-embed-${index}-field-${fieldIndex}`}><p className="font-medium">{field.name}</p><p className="whitespace-pre-wrap break-words">{field.value}</p></div>)}
-      </div>)}
-      {message.attachments.length > 0 && <ul className="flex flex-col gap-1">{message.attachments.map((attachment, index) => {
-        const href = safeHttpsUrl(attachment.url)
-        return <li key={`${attachment.url}-${index}`}>{href ? <a className="inline-flex items-center gap-1 text-sm underline underline-offset-4" href={href} target="_blank" rel="noopener noreferrer">{attachment.name || "Attachment"}<ExternalLink className="size-3" /></a> : <span className="text-sm text-muted-foreground">{attachment.name || "Attachment unavailable"}</span>}</li>
-      })}</ul>}
-    </li>
-  )
 }
 
 function safeHttpsUrl(value: string | null | undefined) {

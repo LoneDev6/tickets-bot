@@ -16,7 +16,7 @@ function loadSettings(env, config) {
     if (base && (!ownerId || !env.CLIENT_ID || !env.DISCORD_CLIENT_SECRET || !env.SESSION_SECRET || env.SESSION_SECRET.length < 32)) {
         throw new Error('Web login requires OWNER_ID, CLIENT_ID, DISCORD_CLIENT_SECRET and SESSION_SECRET (at least 32 characters).');
     }
-    for (const name of ['MESSAGE_CONTENT_APPROVED', 'WEB_CHAT_ENABLED']) {
+    for (const name of ['MESSAGE_CONTENT_APPROVED', 'WEB_CHAT_ENABLED', 'WEB_REPLIES_ENABLED']) {
         if (env[name] !== undefined && !['true', 'false'].includes(env[name])) throw new Error(`${name} must be true or false.`);
     }
     if (env.STATS_API_TOKEN && (env.STATS_API_TOKEN.length < 32 || env.STATS_API_TOKEN.length > 256 || /\s/.test(env.STATS_API_TOKEN))) throw new Error('STATS_API_TOKEN must contain 32–256 characters without whitespace.');
@@ -32,7 +32,7 @@ function loadSettings(env, config) {
         discordToken: env.DISCORD_TOKEN, clientId: env.CLIENT_ID, clientSecret: env.DISCORD_CLIENT_SECRET,
         sessionSecret: env.SESSION_SECRET, encryptionKey: env.TICKET_ENCRYPTION_KEY,
         messageContentApproved: env.MESSAGE_CONTENT_APPROVED === 'true',
-        webChatEnabled: env.WEB_CHAT_ENABLED === 'true', statsApiToken: env.STATS_API_TOKEN || null,
+        webChatEnabled: env.WEB_CHAT_ENABLED === 'true', webRepliesEnabled: env.WEB_REPLIES_ENABLED === 'true', statsApiToken: env.STATS_API_TOKEN || null,
         privacyRegion: env.PRIVACY_HOSTING_REGION || null, privacyEmailProvider: env.PRIVACY_EMAIL_PROVIDER || null,
         backups: env.PRIVACY_BACKUP_POLICY || null,
         tunnelToken: env.TUNNEL_TOKEN || null, cloudflaredPath: env.CLOUDFLARED_PATH || null,
