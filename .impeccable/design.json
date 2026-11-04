@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-04T09:30:00Z",
+  "title": "Design System: LoneDev's Tickets",
+  "extensions": {
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "web/src/components/ui/button.tsx",
+      "description": "Official radix-nova neutral Button. Sample values observed on the rendered Cerca button; source component remains authoritative.",
+      "html": "<button class=\"sample-button\">Cerca</button>",
+      "css": ".sample-button{background:oklch(0.205 0 0);color:oklch(0.985 0 0);border:0;border-radius:10px;padding:0 10px;height:32px;font:500 14px/20px 'Geist Variable',sans-serif}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Official shadcn/ui",
+    "overview": "Italian staff ticket dashboard using the official neutral registry theme and generated primitives.",
+    "keyCharacteristics": ["Operational table", "Responsive filters", "Explicit text statuses", "Accessible disabled and error states"],
+    "rules": ["Preserve generated UI primitives and semantic theme tokens.", "Use synthetic data for visual evidence."],
+    "dos": ["Use Italian labels and locale dates.", "Announce external new-tab links."],
+    "donts": ["Do not introduce custom palettes, illustrations or visual components.", "Do not display stale rows under a changed filter after a failed request."]
+  }
+}
