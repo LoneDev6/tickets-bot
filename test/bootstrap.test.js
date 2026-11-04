@@ -16,43 +16,50 @@ function put(root, file, value = '{}') {
     fs.writeFileSync(path.join(root, file), value);
 }
 
-test('startup installs and builds once, refreshes changed inputs, and isolates build secrets', t => {
+test('startup uses the prebuilt panel without frontend dependencies or compilation and isolates installer secrets', t => {
     const root = directory(t);
-    for (const file of ['package.json', 'package-lock.json', 'web/package.json', 'web/package-lock.json', 'web/tsconfig.json', 'web/vite.config.ts', 'web/index.html', 'web/src/App.tsx']) put(root, file);
+    for (const file of ['package.json', 'package-lock.json']) put(root, file);
+    put(root, 'web/dist/index.html', '<script type="module" src="/assets/panel.js"></script>');
+    put(root, 'web/dist/assets/panel.js', 'synthetic compiled panel');
     const calls = [];
     const options = { log() {}, env: { PATH: '/synthetic/bin', NODE_ENV: 'production', DISCORD_TOKEN: 'private', VITE_SECRET: 'private', SESSION_SECRET: 'private', npm_config_prefix: '/incompatible' },
         run(command, args, settings) {
             calls.push({ command, args, settings });
-            if (args[0] === 'ci') {
-                const required = settings.cwd === root ? ['discord.js', 'dotenv', 'enmap', 'express', 'express-session', 'memorystore'] : ['vite', 'typescript', 'react'];
-                for (const name of required) put(settings.cwd, `node_modules/${name}/package.json`);
-                if (settings.cwd === root) put(root, 'node_modules/better-sqlite3/build/Release/better_sqlite3.node', 'synthetic native module');
-            } else put(root, 'web/dist/index.html', 'synthetic compiled panel');
+            assert.equal(settings.cwd, root);
+            assert.equal(args[0], 'ci');
+            for (const name of ['discord.js', 'dotenv', 'enmap', 'express', 'express-session', 'memorystore']) put(root, `node_modules/${name}/package.json`);
+            put(root, 'node_modules/better-sqlite3/build/Release/better_sqlite3.node', 'synthetic native module');
         },
     };
     prepare(root, options);
-    assert.equal(calls.length, 3);
+    assert.equal(calls.length, 1);
     assert.deepEqual(calls[0].args, ['ci', '--include=dev', '--no-audit', '--no-fund']);
-    assert.deepEqual(calls[1].args, ['ci', '--include=dev', '--no-audit', '--no-fund']);
-    assert.deepEqual(calls[2].args, ['run', 'build']);
     for (const call of calls) { assert.equal(call.command, 'npm'); assert.deepEqual(call.settings.env, { PATH: '/synthetic/bin' }); assert.equal(call.settings.shell, false); }
-    prepare(root, options); assert.equal(calls.length, 3);
+    prepare(root, options); assert.equal(calls.length, 1);
     put(root, 'web/src/App.tsx', 'changed source');
-    prepare(root, options); assert.equal(calls.length, 4); assert.deepEqual(calls[3].args, ['run', 'build']);
+    prepare(root, options); assert.equal(calls.length, 1);
     put(root, 'web/package-lock.json', '{"changed":true}');
-    prepare(root, options); assert.equal(calls.length, 6);
+    prepare(root, options); assert.equal(calls.length, 1);
     put(root, 'package-lock.json', '{"changed":true}');
-    prepare(root, options); assert.equal(calls.length, 7);
-    fs.rmSync(path.join(root, 'web/dist'), { recursive: true });
-    prepare(root, options); assert.equal(calls.length, 8);
+    prepare(root, options); assert.equal(calls.length, 2);
+    assert.equal(fs.existsSync(path.join(root, 'web/node_modules')), false);
     assert.equal(typeof require('../index').main, 'function');
 });
 
 test('failed dependency preparation never marks the installation complete', t => {
     const root = directory(t);
     put(root, 'package.json'); put(root, 'package-lock.json');
+    put(root, 'web/dist/index.html', 'synthetic compiled panel');
     assert.throws(() => prepare(root, { log() {}, run() { throw new Error('synthetic npm error'); } }), /Preparazione npm fallita/);
     assert.equal(fs.existsSync(path.join(root, 'node_modules/.tickets-prepared')), false);
+});
+
+test('missing or incomplete distributed panel fails clearly without starting an installer or compiler', t => {
+    const root = directory(t);
+    const options = { log() {}, run() { assert.fail('No installation or build should start'); } };
+    assert.throws(() => prepare(root, options), /Build pannello mancante/);
+    put(root, 'web/dist/index.html', '<link href="/assets/missing.css" rel="stylesheet">');
+    assert.throws(() => prepare(root, options), /Build pannello incompleta/);
 });
 
 test('generated secrets survive restart, stay private and cannot be silently replaced', t => {

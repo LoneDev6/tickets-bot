@@ -167,7 +167,7 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, staticD
     if (existsSync(path.join(staticDir, 'index.html'))) {
         app.use(express.static(staticDir, { index: false, dotfiles: 'deny' }));
         app.get(['/', '/privacy', '/tickets/:id'], (_req, res) => res.sendFile(path.join(staticDir, 'index.html')));
-    } else app.get(['/', '/privacy'], (_req, res) => res.status(503).type('text').send('Pannello non compilato. Eseguire npm run install:web e npm run build:web. Informativa: /api/privacy'));
+    } else app.get(['/', '/privacy'], (_req, res) => res.status(503).type('text').send('Build del pannello mancante. Compilare in locale e distribuire web/dist. Informativa: /api/privacy'));
     app.use((error, _req, res, _next) => {
         if (res.headersSent) return res.end();
         const status = [400, 401, 403, 413, 503].includes(error.status) ? error.status : 500;

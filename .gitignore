@@ -17,6 +17,9 @@ pids
 
 # Dist
 dist
+!web/dist/
+!web/dist/**
+web/dist/.tickets-built
 dist-docs
 
 # Miscellaneous

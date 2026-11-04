@@ -1,13 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { randomBytes } = require('node:crypto');
+const path = require('node:path');
 const { TicketStore } = require('../tickets');
 const { TicketService } = require('../ticket-service');
 const { createApp, sameToken } = require('../server');
 const { loadSettings } = require('../settings');
 
 const ids = { ticket: '120000000000000001', user: '120000000000000002', guild: '120000000000000004', parent: '120000000000000005', role: '120000000000000008' };
-async function fixture(t) {
+async function fixture(t, staticDir = '/nonexistent-test-fixture') {
     const settings = { development: true, publicBaseUrl: 'http://127.0.0.1', guildId: ids.guild, ticketParentId: ids.parent, supportRoleId: ids.role, ownerId: '120000000000000009', sessionSecret: randomBytes(48).toString('hex'), clientId: 'test', clientSecret: 'test', messageContentApproved: false };
     let staff = true;
     const provider = async url => {
@@ -18,7 +19,7 @@ async function fixture(t) {
     const store = new TicketStore(new Map(), randomBytes(32).toString('base64'));
     store.upsert({ threadId: ids.ticket, guildId: ids.guild, parentId: ids.parent, openerId: ids.user, description: '<script>private</script>' });
     const service = new TicketService({}, store, settings);
-    const app = createApp({ service, settings, fetchImpl: provider, staticDir: '/nonexistent-test-fixture' });
+    const app = createApp({ service, settings, fetchImpl: provider, staticDir });
     const server = app.listen(0, '127.0.0.1');
     await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
     settings.publicBaseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -55,6 +56,18 @@ test('public privacy, staff OAuth, protected APIs, CSRF and disabled writes', as
     assert.equal((await f.request(`/api/tickets/${ids.ticket}/reply`, { method: 'POST', headers: { Origin: f.settings.publicBaseUrl, 'X-CSRF-Token': session.csrfToken } })).status, 409);
     assert.equal((await f.request('/auth/logout', { method: 'POST' })).status, 403);
     assert.equal((await f.request('/auth/logout', { method: 'POST', headers: { Origin: f.settings.publicBaseUrl, 'X-CSRF-Token': session.csrfToken } })).status, 204);
+    assert.equal((await f.request('/api/tickets')).status, 401);
+});
+
+test('distributed panel and its compiled assets are served without frontend tooling while ticket APIs remain protected', async t => {
+    const f = await fixture(t, path.join(__dirname, '../web/dist'));
+    const response = await f.request('/');
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^"?#]+)"/g)];
+    assert(assets.length >= 2);
+    for (const [, asset] of assets) assert.equal((await f.request(asset)).status, 200, asset);
+    assert.equal((await f.request('/privacy')).status, 200);
     assert.equal((await f.request('/api/tickets')).status, 401);
 });
 

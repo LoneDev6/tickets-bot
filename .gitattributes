@@ -1,0 +1,2 @@
+# Preserve generated bundles verbatim, including whitespace in dependency template strings.
+web/dist/** linguist-generated=true -whitespace

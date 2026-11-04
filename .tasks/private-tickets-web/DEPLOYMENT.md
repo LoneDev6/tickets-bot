@@ -1,6 +1,6 @@
 # HTTPS su HumbleServers / Pterodactyl
 
-Aggiornamento implementazione: il bootstrap ora installa dipendenze, compila il frontend, genera/persiste i segreti locali mancanti e scarica/verifica il connector Linux x64/arm64 automaticamente. La guida iniziale in console raccoglie solo valori pubblici e mostra i passaggi Cloudflare/OAuth; token e secret si impostano in variabili protette o `.env`. Le istruzioni sotto conservano il progetto iniziale; la procedura operativa corrente è nel [README](../../README.md).
+Aggiornamento implementazione: per il limite live di 256 MB, il frontend viene compilato in locale e distribuito da Git in `web/dist`, senza installazione o build sul server. Il bootstrap installa solo dipendenze bot, genera/persiste i segreti locali mancanti e scarica/verifica il connector Linux x64/arm64 automaticamente. La guida iniziale in console raccoglie solo valori pubblici e mostra i passaggi Cloudflare/OAuth; token e secret si impostano in variabili protette o `.env`. Le istruzioni sotto conservano il progetto iniziale; la procedura operativa corrente è nel [README](../../README.md).
 
 ## Vincoli confermati
 

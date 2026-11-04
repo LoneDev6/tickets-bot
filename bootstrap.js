@@ -19,45 +19,27 @@ function matches(file, value) { return fs.existsSync(file) && fs.readFileSync(fi
 function prepare(root = __dirname, { run = execFileSync, env = process.env, log = console.log } = {}) {
     const [major, minor] = process.versions.node.split('.').map(Number);
     if (!((major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major > 22)) throw failure('Serve Node 20.19+ oppure 22.12+. Cambia runtime nel pannello Pterodactyl.');
-    // Build tools receive no Discord, OAuth, tunnel or archive secrets, including VITE_* variables.
+    const dist = path.join(root, 'web', 'dist');
+    const index = path.join(dist, 'index.html');
+    if (!fs.existsSync(index)) throw failure('Build pannello mancante. Esegui npm run build:web in locale e pubblica web/dist nel repository.');
+    const assets = [...fs.readFileSync(index, 'utf8').matchAll(/(?:src|href)="(\/assets\/[^"?#]+)"/g)];
+    if (assets.some(([, asset]) => !fs.existsSync(path.join(dist, asset.slice(1))))) throw failure('Build pannello incompleta. Ricompila in locale e pubblica tutta la cartella web/dist.');
+    // Installers receive no Discord, OAuth, tunnel or archive secrets.
     const toolEnv = Object.fromEntries(Object.entries(env).filter(([key]) => /^(PATH|HOME|USER|LOGNAME|LANG|LC_ALL|TMPDIR|TMP|TEMP|NODE_EXTRA_CA_CERTS|HTTPS_PROXY|HTTP_PROXY|NO_PROXY|npm_config_cache|NPM_CONFIG_CACHE)$/.test(key)));
     const npm = (cwd, args) => {
         try { run('npm', args, { cwd, env: toolEnv, stdio: 'inherit', timeout: 300_000, shell: false }); }
         catch { throw failure('Preparazione npm fallita. Controlla l’errore sopra, rete, spazio disco e runtime; il bot non è stato avviato. Riprova con un riavvio.'); }
     };
-    function dependencies(dir, frontend) {
-        const fingerprint = hash(fs.readFileSync(path.join(dir, 'package-lock.json')) + fs.readFileSync(path.join(dir, 'package.json')) + `${process.version}/${process.platform}/${process.arch}`);
-        const stamp = path.join(dir, 'node_modules', '.tickets-prepared');
-        const required = frontend ? ['vite', 'typescript', 'react'] : ['discord.js', 'dotenv', 'enmap', 'express', 'express-session', 'memorystore'];
-        if (!matches(stamp, fingerprint) || required.some(name => !fs.existsSync(path.join(dir, 'node_modules', name, 'package.json')))
-            || (!frontend && !fs.existsSync(path.join(dir, 'node_modules/better-sqlite3/build/Release/better_sqlite3.node')))) {
-            log(`[startup] Installazione dipendenze ${frontend ? 'pannello' : 'bot'}…`);
-            npm(dir, ['ci', '--include=dev', '--no-audit', '--no-fund']);
-            fs.writeFileSync(stamp, fingerprint);
-        }
-        return fingerprint;
-    }
-    dependencies(root, false);
-    const web = path.join(root, 'web');
-    const dependencyHash = dependencies(web, true);
-    const source = createHash('sha256').update(dependencyHash);
-    function include(relative) {
-        const file = path.join(web, relative);
-        if (!fs.existsSync(file)) return;
-        if (fs.statSync(file).isDirectory()) {
-            for (const child of fs.readdirSync(file).sort()) include(path.join(relative, child));
-        } else source.update(relative).update(fs.readFileSync(file));
-    }
-    for (const relative of ['src', 'public', 'index.html', 'vite.config.ts', ...fs.readdirSync(web).filter(name => /^tsconfig.*\.json$/.test(name)).sort()]) include(relative);
-    const fingerprint = source.digest('hex');
-    const stamp = path.join(web, 'dist', '.tickets-built');
-    if (!matches(stamp, fingerprint) || !fs.existsSync(path.join(web, 'dist', 'index.html'))) {
-        log('[startup] Compilazione pannello…');
-        npm(web, ['run', 'build']);
-        if (!fs.existsSync(path.join(web, 'dist', 'index.html'))) throw failure('Build pannello incompleta; avvio interrotto.');
+    const fingerprint = hash(fs.readFileSync(path.join(root, 'package-lock.json')) + fs.readFileSync(path.join(root, 'package.json')) + `${process.version}/${process.platform}/${process.arch}`);
+    const stamp = path.join(root, 'node_modules', '.tickets-prepared');
+    const required = ['discord.js', 'dotenv', 'enmap', 'express', 'express-session', 'memorystore'];
+    if (!matches(stamp, fingerprint) || required.some(name => !fs.existsSync(path.join(root, 'node_modules', name, 'package.json')))
+        || !fs.existsSync(path.join(root, 'node_modules/better-sqlite3/build/Release/better_sqlite3.node'))) {
+        log('[startup] Installazione dipendenze bot…');
+        npm(root, ['ci', '--include=dev', '--no-audit', '--no-fund']);
         fs.writeFileSync(stamp, fingerprint);
     }
-    log('[startup] Dipendenze e pannello pronti.');
+    log('[startup] Dipendenze bot e pannello precompilato pronti.');
 }
 
 function configureSecrets(root = __dirname, env = process.env) {
