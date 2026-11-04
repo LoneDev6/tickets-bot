@@ -51,7 +51,7 @@ Use the generated radius tokens without custom silhouettes.
 
 ## Components
 
-Official registry primitives live in `web/src/components/ui/`; compose them in `App.tsx`. Keep generated primitives unchanged. Include loading, empty, error and disabled states. Failed filtered requests hide stale rows and offer retry. Staff actions use existing Button/Input/Alert primitives. Conversation defaults to a clear explanation and new-tab Discord link; content appears only when both server flags permit it and the ticket is not excluded.
+Official registry primitives live in `web/src/components/ui/`; compose them in `App.tsx`. Keep generated primitives unchanged. Include loading, empty, error and disabled states. Failed filtered requests hide stale rows and offer retry. Staff actions use existing Button/Input/Alert primitives. Hide the Conversation section when chat is unavailable or excluded; keep the single new-tab Discord link in the detail header. Show the section only when both server flags permit reading and the ticket is not excluded.
 
 ## Do's and Don'ts
 

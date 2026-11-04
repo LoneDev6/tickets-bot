@@ -627,16 +627,14 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader><CardTitle>Conversation</CardTitle><CardDescription>Messages are available only when the session has read access.</CardDescription></CardHeader>
+      {conversationAvailable && <Card>
+        <CardHeader><CardTitle>Conversation</CardTitle></CardHeader>
         <CardContent className="flex flex-col gap-4">
-          {messagesPending && !messages.data ? <div className="flex flex-col gap-3" aria-label="Loading conversation" aria-busy="true"><Skeleton className="h-20 w-full" /><Skeleton className="h-20 w-4/5" /></div> : !conversationAvailable ? (
-            <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-muted-foreground">{item.contentExcluded ? "Conversation content was excluded from recording." : session.capabilities.reason || "Conversation reading is not enabled for this session."}</p>{discordHref && <Button asChild variant="outline"><a href={discordHref} target="_blank" rel="noopener noreferrer">Open in Discord <span className="sr-only">opens in a new tab</span><ExternalLink /></a></Button>}</div>
-          ) : (
+          {messagesPending && !messages.data ? <div className="flex flex-col gap-3" aria-label="Loading conversation" aria-busy="true"><Skeleton className="h-20 w-full" /><Skeleton className="h-20 w-4/5" /></div> : (
             <>
               {currentMessagesError && <Alert variant="destructive"><AlertTitle>Conversation unavailable</AlertTitle><AlertDescription>{currentMessagesError}</AlertDescription></Alert>}
               {messagesPending && <p className="text-sm text-muted-foreground" role="status">Updating conversation…</p>}
-              {messages.data && !messages.data.available ? <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-muted-foreground">{messages.data.reason || "Conversation unavailable."}</p>{discordHref && <Button asChild variant="outline"><a href={discordHref} target="_blank" rel="noopener noreferrer">Open in Discord <span className="sr-only">opens in a new tab</span><ExternalLink /></a></Button>}</div> : messages.data?.messages.length ? (
+              {messages.data && !messages.data.available ? <p className="text-sm text-muted-foreground">{messages.data.reason || "Conversation unavailable."}</p> : messages.data?.messages.length ? (
                 <>
                   {messages.olderError && <Alert variant="destructive"><AlertDescription>{messages.olderError}</AlertDescription></Alert>}
                   {messages.data.nextBefore && <Button variant="outline" className="w-fit" onClick={loadOlderMessages} disabled={messages.loadingMore}>{messages.loadingMore ? "Loading…" : "Load older messages"}</Button>}
@@ -647,7 +645,7 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
           )}
           {session.capabilities.canReply && <><Separator /><p className="text-sm text-muted-foreground">Replies are not available in this dashboard.</p></>}
         </CardContent>
-      </Card>
+      </Card>}
     </section>
   )
 }
