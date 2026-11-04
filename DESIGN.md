@@ -41,6 +41,8 @@ Use the scaffold's Geist Variable font and shadcn text utilities. Dates use the 
 
 Use a table on desktop and the same information in a compact list on narrow viewports. Filters, status tabs, infinite-loading fallback and detail remain keyboard accessible. Mobile tabs wrap into a grid within their container.
 
+Use the initial message as the list preview, with ellipsis and user-requested hover/focus scrolling; respect reduced motion. The whole row opens details while keeping a normal keyboard-accessible link and allowing text selection. Show requester Avatar with initials when an image is unavailable. Prefer cached Discord names, then saved names and an ID-checked legacy-title fallback.
+
 ## Elevation & Depth
 
 Use the generated Card, Alert and overlay defaults.
@@ -51,7 +53,7 @@ Use the generated radius tokens without custom silhouettes.
 
 ## Components
 
-Official registry primitives live in `web/src/components/ui/`; compose them in `App.tsx`. Keep generated primitives unchanged. Include loading, empty, error and disabled states. Failed filtered requests hide stale rows and offer retry. Staff actions use existing Button/Input/Alert primitives. Hide the Conversation section when chat is unavailable or excluded; keep the single new-tab Discord link in the detail header. Show the section only when both server flags permit reading and the ticket is not excluded.
+Official registry primitives live in `web/src/components/ui/`; compose them in `App.tsx`. Keep generated primitives unchanged. Include loading, empty, error and disabled states. Failed filtered requests hide stale rows and offer retry. Staff action Buttons sit beside Open in Discord, wrapping on narrow viewports. Clicking opens the official Dialog at fullscreen size with an optional Textarea reason and explicit confirm/cancel; preserve text on error and restore focus on close. Hide the Conversation section when chat is unavailable or excluded; keep the single new-tab Discord link in the detail header. Show the section only when both server flags permit reading and the ticket is not excluded.
 
 ## Do's and Don'ts
 

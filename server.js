@@ -13,6 +13,7 @@ function sameToken(a, b) {
 }
 
 function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger = console, staticDir = path.join(__dirname, 'web', 'dist') }) {
+    const serializeTicket = ticket => publicTicket(ticket, service.client.users?.cache?.get(ticket.openerId));
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -144,7 +145,7 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger 
             || !/^\d{1,6}$/.test(page) || !/^\d{1,3}$/.test(pageSize) || Number(page) < 1 || Number(pageSize) < 1 || Number(pageSize) > 100) return res.status(400).json({ error: 'Invalid filters.' });
         if (cursor && Number(revision) !== service.store.revision) return res.status(409).json({ error: 'The ticket list changed. Reload the results.' });
         const result = service.store.list({ status, type, q, opener, sort, page: Number(page), pageSize: Number(pageSize), cursor });
-        res.json({ ...result, tickets: result.tickets.map(publicTicket), sync: service.sync });
+        res.json({ ...result, tickets: result.tickets.map(serializeTicket), sync: service.sync });
     });
     app.param('ticketId', (req, res, next, value) => {
         if (!ID.test(value)) return res.status(400).json({ error: 'Invalid ticket ID.' });
@@ -152,7 +153,7 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger 
         if (!ticket || ticket.guildId !== settings.guildId || !(settings.ticketParentIds || [settings.ticketParentId]).includes(ticket.parentId)) return res.status(404).json({ error: 'Ticket not found or no longer retained.' });
         req.ticket = ticket; next();
     });
-    app.get('/api/tickets/:ticketId', (req, res) => res.json({ ticket: publicTicket(req.ticket) }));
+    app.get('/api/tickets/:ticketId', (req, res) => res.json({ ticket: serializeTicket(req.ticket) }));
     app.get('/api/tickets/:ticketId/messages', (req, res) => {
         if (!service.capabilities().canReadConversation || req.ticket.contentExcluded) return res.status(409).json({ error: req.ticket.contentExcluded ? 'Web chat is excluded for this ticket.' : service.capabilities().reason });
         if (req.query.before !== undefined && !ID.test(req.query.before)) return res.status(400).json({ error: 'Invalid message cursor.' });
@@ -165,7 +166,7 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger 
         if (req.ticket.status === 'deleted') return res.status(409).json({ error: 'Deleted tickets cannot be modified.' });
         const guild = await service.client.guilds.fetch(settings.guildId);
         await service.action(req.ticket.threadId, action, { id: req.session.user.id, guild }, reason.trim());
-        res.json({ ticket: publicTicket(service.store.get(req.ticket.threadId)) });
+        res.json({ ticket: serializeTicket(service.store.get(req.ticket.threadId)) });
     }));
     app.all('/api/tickets/:ticketId/:action', csrf, (_req, res) => res.status(409).json({ error: 'Replies are currently available in Discord.' }));
     app.get('/api/events', asyncRoute(async (req, res) => {

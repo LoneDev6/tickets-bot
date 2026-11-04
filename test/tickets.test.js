@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { randomBytes } = require('node:crypto');
-const { TicketStore, ticketStatus, DAY } = require('../tickets');
+const { TicketStore, ticketStatus, publicTicket, DAY } = require('../tickets');
 const { parseCard, importLegacy } = require('../legacy');
 
 const ticketId = '120000000000000001';
@@ -85,6 +85,26 @@ test('filters and paging apply to the whole dataset', () => {
     assert.equal(store.list({ type: 'Payment', pageSize: 5, page: 2 }).total, 15);
     assert.equal(store.list({ type: 'Payment', pageSize: 5, page: 2 }).tickets.length, 5);
     assert.equal(store.list({ q: 'ticket 29' }).total, 1);
+});
+
+test('public ticket resolves legacy opener names only for matching IDs without mutating stored data', () => {
+    const ticket = { ...base, name: `Generic: Legacy Name (${userId})` };
+    assert.equal(publicTicket(ticket).openerName, 'Legacy Name');
+    assert.equal(publicTicket({ ...ticket, name: 'Generic: Legacy Name (bad)' }).openerName, null);
+    assert.equal(publicTicket({ ...ticket, name: `Payment: Legacy Name (${messageId})` }).openerName, null);
+    assert.equal(publicTicket({ ...base, openerName: userId }).openerName, null);
+    assert.equal(publicTicket({ ...ticket, openerId: null }).openerName, 'Legacy Name');
+    assert.equal(publicTicket({ ...ticket, openerName: 'Saved Name' }).openerName, 'Saved Name');
+    assert.equal(publicTicket({ ...ticket, openerName: userId }).openerName, 'Legacy Name');
+    assert.deepEqual(ticket, { ...base, name: `Generic: Legacy Name (${userId})` });
+});
+
+test('cached Discord identity and avatar take precedence over saved ticket data', () => {
+    const ticket = { ...base, openerName: 'Old Name', openerAvatarUrl: 'old-avatar' };
+    const user = { globalName: 'Discord Name', username: 'username', displayAvatarURL: options => { assert.deepEqual(options, { extension: 'png', size: 64 }); return 'avatar-url'; } };
+    assert.deepEqual(publicTicket(ticket, user), { ...ticket, openerName: 'Discord Name', openerAvatarUrl: 'avatar-url', discordUrl: `https://discord.com/channels/${base.guildId}/${ticketId}`, recordedParticipantsOnly: true });
+    assert.equal(publicTicket(ticket, { username: 'Fallback' }).openerName, 'Fallback');
+    assert.equal(publicTicket(ticket).openerAvatarUrl, null);
 });
 
 test('owner lookup uses exact IDs or mentions, and escalation sorting works across cursor pages', () => {

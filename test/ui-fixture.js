@@ -10,14 +10,14 @@ const settings = { development: true, publicBaseUrl: 'http://127.0.0.1', guildId
 const store = new TicketStore(new Map(), randomBytes(32).toString('base64'));
 for (let index = 0; index < 32; index++) store.upsert({
     threadId: String(120000000000000100n + BigInt(index)), guildId: ids.guild, parentId: ids.parent,
-    name: `[Synthetic data] ${index % 2 ? 'Payment' : 'Generic'}: Ticket ${index + 1}`,
-    openerId: ids.user, openerName: 'Test requester', type: index % 2 ? 'Payment' : 'Generic',
+    name: index === 0 ? 'Generic: kokoloko4503 (904765111766499338)' : `[Synthetic data] ${index % 2 ? 'Payment' : 'Generic'}: Ticket ${index + 1}`,
+    openerId: index === 0 ? '904765111766499338' : ids.user, openerName: index === 0 ? null : 'Test requester', type: index % 2 ? 'Payment' : 'Generic',
     description: 'Synthetic support request for testing the list, search, details and actions. No real ticket data is loaded.',
     createdAt: Date.now() - index * 3_600_000, archived: index > 25, locked: index > 28,
     deletedAt: index === 31 ? Date.now() : null,
 });
 const guild = { id: ids.guild, members: { fetch: async ({ user }) => ({ id: user, roles: { cache: new Collection([[ids.role, {}]]) } }) } };
-const client = { guilds: { fetch: async () => guild }, channels: { fetch: async id => {
+const client = { users: { cache: new Map([[ids.user, { username: 'Test requester', displayAvatarURL: () => 'https://cdn.discordapp.com/embed/avatars/0.png' }]]) }, guilds: { fetch: async () => guild }, channels: { fetch: async id => {
     const ticket = store.get(id);
     if (!ticket) throw Object.assign(new Error('Unknown synthetic ticket'), { code: 10003 });
     const thread = { ...ticket, id, type: ChannelType.PrivateThread, members: { add: async () => {} }, send: async () => ({ id: '120000000000000999' }) };

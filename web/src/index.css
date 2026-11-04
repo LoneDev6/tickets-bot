@@ -129,3 +129,19 @@
     @apply font-sans;
     }
 }
+
+@media (prefers-reduced-motion: no-preference) {
+  .ticket-preview:is(:hover, :focus-visible) {
+    text-overflow: clip;
+  }
+
+  .ticket-preview:is(:hover, :focus-visible) > span {
+    display: inline-block;
+    animation: ticket-preview-scroll var(--preview-duration, 0s) linear 1s infinite alternate;
+  }
+}
+
+@keyframes ticket-preview-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(-1 * var(--preview-overflow, 0px))); }
+}

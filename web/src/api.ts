@@ -25,6 +25,7 @@ export type Ticket = {
   name: string | null
   openerId: string | null
   openerName: string | null
+  openerAvatarUrl: string | null
   type: TicketType | null
   description: string | null
   createdAt: number | null

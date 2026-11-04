@@ -18,6 +18,8 @@ Il frontend usa il registry ufficiale shadcn (`radix-nova`, base `neutral`) con 
 
 La navigazione tra elenco, dettaglio e privacy e i pulsanti Retry sono gestiti da React senza ricaricare il documento. URL e cronologia del browser restano utilizzabili. Gli aggiornamenti live mantengono visibili le righe e le pagine già caricate mentre recuperano i dati aggiornati.
 
+L’elenco mostra l’anteprima del messaggio iniziale con ellissi e scorrimento su hover/focus (rispettando le preferenze di movimento ridotto). Il clic sulla riga apre i dettagli. Nome e avatar provengono dalla cache Discord del bot; se manca il nome, si usa quello salvato o il vecchio titolo quando l’ID coincide. Gli avatar mancanti mostrano le iniziali. Le azioni sono accanto a Open in Discord e aprono un Dialog fullscreen per motivo opzionale e conferma: non viene inviata alcuna azione prima della conferma.
+
 ## Configurazione
 
 Al primo avvio, se mancano dominio o ID pubblici, compare una **guida in console**. Spiega come creare il tunnel Cloudflare, chiede origine HTTPS, Application ID e ID del proprietario, mostra il redirect OAuth esatto e salva solo questi valori pubblici in `.runtime/setup.json`. Rispondere alle domande usando l'input della console Pterodactyl. Con tutti i valori già configurati la guida viene saltata.

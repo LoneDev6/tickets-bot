@@ -132,7 +132,7 @@ class TicketStore extends EventEmitter {
         const owner = opener.trim().replace(/^<@!?(\d{16,22})>$/, '$1').toLocaleLowerCase();
         const tickets = this.all().filter(ticket => (status === 'all' || ticket.status === status)
             && (type === 'all' || ticket.type === type)
-            && (!owner || (ID.test(owner) ? ticket.openerId === owner : [ticket.openerName, ticket.name?.match(/^(?:Generic|Payment):\s*(.+?)\s*\(\d{16,22}\)$/i)?.[1]].some(value => String(value || '').toLocaleLowerCase().includes(owner))))
+            && (!owner || (ID.test(owner) ? ticket.openerId === owner : [ticket.openerName, ticketOpenerName(ticket)].some(value => String(value || '').toLocaleLowerCase().includes(owner))))
             && (!query || [ticket.threadId, ticket.name, ticket.openerId, ticket.openerName, ticket.description]
                 .some(value => String(value || '').toLocaleLowerCase().includes(query))));
         const field = sort === 'created' ? 'createdAt' : 'updatedAt';
@@ -241,9 +241,17 @@ class TicketStore extends EventEmitter {
     }
 }
 
-function publicTicket(ticket) {
+function ticketOpenerName(ticket) {
+    if (ticket.openerName && ticket.openerName !== ticket.openerId) return ticket.openerName;
+    const match = ticket.name?.match(/^(?:Generic|Payment):\s*(.+?)\s*\((\d{16,22})\)$/i);
+    return match && (!ticket.openerId || match[2] === ticket.openerId) ? match[1] : null;
+}
+
+function publicTicket(ticket, user) {
     return {
         ...ticket,
+        openerName: user?.globalName || user?.username || ticketOpenerName(ticket),
+        openerAvatarUrl: user?.displayAvatarURL?.({ extension: 'png', size: 64 }) || null,
         discordUrl: ticket.status === 'deleted' ? null : `https://discord.com/channels/${ticket.guildId}/${ticket.threadId}`,
         recordedParticipantsOnly: true,
     };

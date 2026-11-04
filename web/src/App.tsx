@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
-import type { ComponentProps, ReactNode } from "react"
-import { ArrowLeft, ExternalLink, LogOut, RefreshCw, Search } from "lucide-react"
+import type { ComponentProps, MouseEvent, ReactNode } from "react"
+import { ArrowLeft, ExternalLink, LogOut, RefreshCw, Search, UserRound } from "lucide-react"
 import { ApiError, apiGet, apiPost, type PrivacyPolicy, type Session, type SyncState, type Ticket, type TicketList, type TicketMessage, type TicketMessages, type TicketStatus } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
 
 type AuthState =
   | { state: "loading" }
@@ -47,8 +50,44 @@ function ticketTypeLabel(type: Ticket["type"]) {
   return type === "Payment" ? "Payment" : type === "Generic" ? "General" : "Unknown"
 }
 
-function ticketName(ticket: Ticket) {
-  return ticket.name || `Ticket ${ticket.threadId}`
+type TicketAction = "close" | "close-lock" | "reopen" | "escalate" | "resolve-escalation"
+const actionLabels: Record<TicketAction, string> = {
+  close: "Close ticket",
+  "close-lock": "Close and lock ticket",
+  reopen: "Reopen ticket",
+  escalate: "Escalate to owner",
+  "resolve-escalation": "Resolve escalation",
+}
+
+function TicketOwner({ ticket }: { ticket: Ticket }) {
+  return <div className="flex min-w-0 items-center gap-3">
+    <Avatar>
+      <AvatarImage src={ticket.openerAvatarUrl || undefined} alt="" loading="lazy" referrerPolicy="no-referrer" />
+      <AvatarFallback>{ticket.openerName ? ticket.openerName.slice(0, 2).toUpperCase() : <UserRound className="size-4" />}</AvatarFallback>
+    </Avatar>
+    <div className="min-w-0 break-words">
+      <p>{ticket.openerName || ticket.openerId || "Unknown requester"}</p>
+      {ticket.openerName && ticket.openerId && <p className="mt-1 text-xs text-muted-foreground">{ticket.openerId}</p>}
+    </div>
+  </div>
+}
+
+function TicketPreview({ ticket, href }: { ticket: Ticket; href: string }) {
+  const text = ticket.description?.replace(/\s+/g, " ").trim() || "Initial message unavailable"
+  const measure = (element: HTMLAnchorElement) => {
+    const overflow = Math.max(0, (element.firstElementChild?.getBoundingClientRect().width || element.scrollWidth) - element.clientWidth)
+    element.style.setProperty("--preview-overflow", `${overflow}px`)
+    element.style.setProperty("--preview-duration", `${Math.max(4, overflow / 35)}s`)
+  }
+  return <AppLink data-ticket-link href={href} title={text} className="ticket-preview block truncate font-medium underline-offset-4 hover:underline" onMouseEnter={(event) => measure(event.currentTarget)} onFocus={(event) => measure(event.currentTarget)}><span>{text}</span></AppLink>
+}
+
+function openTicketRow(event: MouseEvent<HTMLElement>) {
+  if (event.defaultPrevented || event.button !== 0 || (event.target as Element).closest("a, button, input, textarea, select") || window.getSelection()?.toString()) return
+  const link = event.currentTarget.querySelector<HTMLAnchorElement>("a[data-ticket-link]")
+  if (!link) return
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) window.open(link.href, "_blank", "noopener,noreferrer")
+  else link.click()
 }
 
 function mergeMessages(...pages: TicketMessage[][]) {
@@ -490,9 +529,9 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
               <TableHeader><TableRow><TableHead>Ticket</TableHead><TableHead>Owner</TableHead><TableHead>Type</TableHead><TableHead>Status</TableHead><TableHead>Last message</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader>
               <TableBody>
                 {list.data.tickets.map((ticket) => (
-                  <TableRow key={ticket.threadId}>
-                    <TableCell><AppLink className="font-medium underline-offset-4 hover:underline" href={hrefFor(ticket)}>{ticketName(ticket)}</AppLink>{ticket.escalatedAt && <Badge variant="destructive" className="ml-2">Escalated</Badge>}<p className="mt-1 max-w-sm truncate text-xs text-muted-foreground">{ticket.description || "—"}</p></TableCell>
-                    <TableCell>{ticket.openerName || ticket.openerId || "Unknown"}<p className="mt-1 text-xs text-muted-foreground">{ticket.openerId || "—"}</p></TableCell>
+                  <TableRow key={ticket.threadId} className="cursor-pointer" onClick={openTicketRow}>
+                    <TableCell className="w-2/5 max-w-0"><TicketPreview ticket={ticket} href={hrefFor(ticket)} />{ticket.escalatedAt && <Badge variant="destructive" className="mt-2">Escalated</Badge>}</TableCell>
+                    <TableCell><TicketOwner ticket={ticket} /></TableCell>
                     <TableCell>{ticketTypeLabel(ticket.type)}</TableCell>
                     <TableCell>{statusBadge(ticket.status)}</TableCell>
                     <TableCell>{ticket.lastMessageAuthorName ?? "—"}<p className="mt-1 text-xs text-muted-foreground">{formatDate(ticket.lastMessageAt)}</p></TableCell>
@@ -504,11 +543,10 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
           </div>
           <ul className="flex flex-col divide-y rounded-md border md:hidden" aria-label="Ticket list">
             {list.data.tickets.map((ticket) => (
-              <li key={ticket.threadId} className="p-4">
-                <AppLink className="font-medium underline-offset-4 hover:underline" href={hrefFor(ticket)}>{ticketName(ticket)}</AppLink>
-                <p className="mt-1 text-sm text-muted-foreground">{ticket.openerName || ticket.openerId || "Unknown"} · {ticketTypeLabel(ticket.type)}</p>
-                <p className="mt-2 line-clamp-2 text-sm">{ticket.description || "—"}</p>
-                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">{statusBadge(ticket.status)}{ticket.escalatedAt && <Badge variant="destructive">Escalated</Badge>}<span className="text-xs text-muted-foreground">Updated {formatDate(ticket.updatedAt)}</span></div>
+              <li key={ticket.threadId} className="min-w-0 cursor-pointer p-4 hover:bg-muted/50" onClick={openTicketRow}>
+                <TicketPreview ticket={ticket} href={hrefFor(ticket)} />
+                <div className="mt-3 text-sm text-muted-foreground"><TicketOwner ticket={ticket} /></div>
+                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">{statusBadge(ticket.status)}<Badge variant="outline">{ticketTypeLabel(ticket.type)}</Badge>{ticket.escalatedAt && <Badge variant="destructive">Escalated</Badge>}<span className="text-xs text-muted-foreground">Updated {formatDate(ticket.updatedAt)}</span></div>
               </li>
             ))}
           </ul>
@@ -540,6 +578,8 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
   const [actionNotice, setActionNotice] = useState("")
   const [actionError, setActionError] = useState("")
   const [actionReason, setActionReason] = useState("")
+  const [selectedAction, setSelectedAction] = useState<TicketAction | null>(null)
+  const actionTrigger = useRef<HTMLButtonElement | null>(null)
   const ticketRequestKey = `${id}|${revision}|${retry}`
   const messagesRequestKey = ticketRequestKey
   const ticketPending = ticket.requestKey !== ticketRequestKey
@@ -604,13 +644,14 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
     }
   }
 
-  async function runAction(action: "close" | "close-lock" | "escalate" | "resolve-escalation" | "reopen") {
+  async function runAction(action: TicketAction) {
     if (!ticket.data || actionBusy || !session.capabilities.canManageTicket || ticket.data.status === "deleted") return
     setActionBusy(true); setActionError(""); setActionNotice("")
     try {
       const result = await apiPost<{ ticket: Ticket }>(`/api/tickets/${encodeURIComponent(id)}/actions`, session.csrfToken, { action, ...(actionReason.trim() ? { reason: actionReason.trim() } : {}) })
       setTicket({ data: result.ticket, error: "", requestKey: ticketRequestKey })
       setActionReason("")
+      setSelectedAction(null)
       setActionNotice("Ticket updated successfully.")
     } catch (error) {
       if (error instanceof ApiError && [401, 403].includes(error.status)) onUnauthorized()
@@ -622,6 +663,9 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
   if (!ticket.data) return <Alert variant="destructive"><AlertTitle>Unable to load ticket</AlertTitle><AlertDescription className="flex flex-wrap items-center justify-between gap-3"><span>{ticketError}</span><Button variant="outline" size="sm" onClick={() => setRetry((value) => value + 1)}>Retry</Button></AlertDescription></Alert>
   const item = ticket.data
   const discordHref = safeDiscordUrl(item.discordUrl)
+  const actions: TicketAction[] = item.status === "open" ? ["close", "close-lock"] : ["reopen"]
+  if (item.escalatedAt) actions.push("resolve-escalation")
+  else if (item.status === "open") actions.push("escalate")
   return (
     <section className="flex flex-col gap-6" aria-labelledby="ticket-heading">
       <AppLink href={returnTo} className="inline-flex w-fit items-center gap-2 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"><ArrowLeft className="size-4" />Back to tickets</AppLink>
@@ -630,25 +674,39 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">{statusBadge(item.status)}<Badge variant="outline">{ticketTypeLabel(item.type)}</Badge>{item.escalatedAt && <Badge variant="destructive">Escalated</Badge>}</div>
-          <h1 id="ticket-heading" className="text-2xl font-semibold tracking-tight">{ticketName(item)}</h1>
-          <p className="text-sm text-muted-foreground">Opened by {item.openerName || item.openerId || "Unknown"} · ID {item.openerId || "—"}</p>
+          <h1 id="ticket-heading" tabIndex={-1} className="text-2xl font-semibold tracking-tight">Ticket details</h1>
+          <p className="text-sm text-muted-foreground">Opened by {item.openerName || item.openerId || "Unknown"}{item.openerName && item.openerId ? ` · ID ${item.openerId}` : ""}</p>
         </div>
-        {discordHref ? <Button asChild variant="outline"><a href={discordHref} target="_blank" rel="noopener noreferrer">Open in Discord <span className="sr-only">opens in a new tab</span><ExternalLink /></a></Button> : <p className="text-sm text-muted-foreground">Discord link unavailable.</p>}
+        <div className="flex flex-wrap items-center gap-2">
+          {discordHref ? <Button asChild variant="outline"><a href={discordHref} target="_blank" rel="noopener noreferrer">Open in Discord <span className="sr-only">opens in a new tab</span><ExternalLink /></a></Button> : <p className="text-sm text-muted-foreground">Discord link unavailable.</p>}
+          {session.capabilities.canManageTicket && item.status !== "deleted" && actions.map((action) => <Button key={action} variant={action === "close-lock" ? "destructive" : "outline"} disabled={actionBusy} onClick={(event) => {
+            actionTrigger.current = event.currentTarget
+            setActionReason(""); setActionError(""); setActionNotice(""); setSelectedAction(action)
+          }}>{actionLabels[action]}</Button>)}
+        </div>
       </div>
 
+      {actionNotice && <p role="status" className="text-sm text-muted-foreground">{actionNotice}</p>}
       {item.escalatedAt && <Alert variant="destructive"><AlertTitle>Escalated ticket</AlertTitle><AlertDescription>{item.escalationReason || "No escalation reason provided."}{item.escalatedBy ? ` · By ${item.escalatedBy}` : ""} · {formatDate(item.escalatedAt)}</AlertDescription></Alert>}
-      {session.capabilities.canManageTicket && item.status !== "deleted" && <Card><CardHeader><CardTitle>Staff actions</CardTitle><CardDescription>Actions are recorded with your account.</CardDescription></CardHeader><CardContent className="flex flex-col gap-3">
-        <Input aria-label="Action reason (optional)" placeholder="Reason (optional)" maxLength={500} value={actionReason} onChange={(event) => setActionReason(event.target.value)} />
-        <div className="flex flex-wrap gap-2">
-          {item.status === "open" && <><Button variant="outline" disabled={actionBusy} onClick={() => void runAction("close")}>Close ticket</Button><Button variant="destructive" disabled={actionBusy} onClick={() => void runAction("close-lock")}>Close and lock ticket</Button></>}
-          {item.status !== "open" && <Button variant="outline" disabled={actionBusy} onClick={() => void runAction("reopen")}>Reopen ticket</Button>}
-          {item.escalatedAt ? <Button variant="outline" disabled={actionBusy} onClick={() => void runAction("resolve-escalation")}>Resolve escalation</Button> : item.status === "open" && <Button variant="outline" disabled={actionBusy} onClick={() => void runAction("escalate")}>Escalate to owner</Button>}
-        </div>
-        {actionNotice && <p role="status" className="text-sm text-muted-foreground">{actionNotice}</p>}{actionError && <Alert variant="destructive"><AlertDescription>{actionError}</AlertDescription></Alert>}
-      </CardContent></Card>}
+      <Dialog open={selectedAction !== null} onOpenChange={(open) => { if (!open && !actionBusy) { setSelectedAction(null); setActionReason(""); setActionError("") } }}>
+        <DialogContent className="inset-0 h-dvh w-screen max-w-none translate-x-0 translate-y-0 grid-rows-[auto_1fr_auto] overflow-y-auto rounded-none p-6 sm:max-w-none" showCloseButton={!actionBusy} onEscapeKeyDown={(event) => { if (actionBusy) event.preventDefault() }} onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          if (actionTrigger.current?.isConnected) actionTrigger.current.focus()
+          else document.getElementById("ticket-heading")?.focus()
+        }}>
+          <DialogHeader className="pr-10"><DialogTitle>{selectedAction ? actionLabels[selectedAction] : "Ticket action"}</DialogTitle><DialogDescription>Add an optional note. This action will be recorded with your account.</DialogDescription></DialogHeader>
+          <form id="ticket-action" className="mx-auto flex w-full max-w-3xl flex-col gap-3 py-6" onSubmit={(event) => { event.preventDefault(); if (selectedAction) void runAction(selectedAction) }}>
+            <label className="text-sm font-medium" htmlFor="action-reason">Reason (optional)</label>
+            <Textarea id="action-reason" className="min-h-40" maxLength={500} value={actionReason} disabled={actionBusy} onChange={(event) => setActionReason(event.target.value)} />
+            <p className="text-sm text-muted-foreground">{actionReason.length}/500 characters</p>
+            {actionError && <Alert variant="destructive"><AlertDescription>{actionError}</AlertDescription></Alert>}
+          </form>
+          <DialogFooter className="-mx-6 -mb-6 rounded-none p-6"><Button variant="outline" disabled={actionBusy} onClick={() => { setSelectedAction(null); setActionReason(""); setActionError("") }}>Cancel</Button><Button type="submit" form="ticket-action" variant={selectedAction === "close-lock" ? "destructive" : "default"} disabled={actionBusy}>{actionBusy ? "Updating…" : selectedAction ? actionLabels[selectedAction] : "Confirm"}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card>
-        <CardHeader><CardTitle>Ticket details</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Initial message</CardTitle></CardHeader>
         <CardContent className="flex flex-col gap-5">
           <p className="whitespace-pre-wrap break-words">{item.description || "No description recorded."}</p>
           <Separator />
