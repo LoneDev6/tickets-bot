@@ -206,6 +206,9 @@ class TicketStore extends EventEmitter {
 
     deleteUser(userId) {
         this.excludeUser(userId);
+        for (const key of this.keys().filter(key => key.startsWith('session:'))) {
+            if (this.read(key)?.data?.user?.id === userId) this.write(key, { revoked: true, expiresAt: this.now() + 30 * DAY });
+        }
         let affected = 0;
         for (const ticket of this.all()) {
             if (ticket.openerId === userId) {

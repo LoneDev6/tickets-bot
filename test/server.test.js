@@ -14,12 +14,17 @@ async function fixture(t, staticDir = '/nonexistent-test-fixture') {
     const provider = async url => {
         if (url.endsWith('/oauth2/token')) return Response.json({ access_token: 'test-token', expires_in: 3600 });
         if (url.endsWith('/users/@me')) return Response.json({ id: ids.user, username: 'Synthetic staff' });
-        return Response.json({ user: { id: ids.user }, roles: staff ? [ids.role] : [] });
+        return Response.json({ message: 'OAuth member lookup must not be used' }, { status: 429 });
     };
     const store = new TicketStore(new Map(), randomBytes(32).toString('base64'));
     store.upsert({ threadId: ids.ticket, guildId: ids.guild, parentId: ids.parent, openerId: ids.user, description: '<script>private</script>' });
-    const service = new TicketService({}, store, settings);
-    const app = createApp({ service, settings, fetchImpl: provider, staticDir });
+    const guild = { id: ids.guild, members: { fetch: async ({ user, force }) => {
+        assert.equal(force, true);
+        return { id: user, roles: { cache: new Map(staff ? [[ids.role, {}]] : []) } };
+    } } };
+    const service = new TicketService({ guilds: { fetch: async () => guild } }, store, settings);
+    const logs = [];
+    const app = createApp({ service, settings, fetchImpl: provider, staticDir, logger: { warn: (...args) => logs.push(args) } });
     const server = app.listen(0, '127.0.0.1');
     await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
     settings.publicBaseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -36,7 +41,7 @@ async function fixture(t, staticDir = '/nonexistent-test-fixture') {
         const state = new URL(start.headers.get('location')).searchParams.get('state');
         return request(`/auth/discord/callback?state=${state}&code=test`);
     }
-    return { request, login, settings, store, service, app, revoke: () => { staff = false; } };
+    return { request, login, settings, store, service, app, guild, logs, cookie: () => cookie, revoke: () => { staff = false; } };
 }
 
 test('public privacy, staff OAuth, protected APIs, CSRF and disabled writes', async t => {
@@ -94,6 +99,67 @@ test('role revocation invalidates an existing session on its next protected requ
     assert.equal((await f.request('/api/session')).status, 401);
 });
 
+test('parallel protected requests share only the pending bot member lookup, never a stale role result', { timeout: 3000 }, async t => {
+    const f = await fixture(t); await f.login();
+    const original = f.guild.members.fetch;
+    let calls = 0; let release; let started;
+    const waiting = new Promise(resolve => { started = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    f.guild.members.fetch = async options => { calls++; started(); await gate; return original(options); };
+    const requests = Promise.all(['/api/session', '/api/tickets', `/api/tickets/${ids.ticket}`].map(route => f.request(route)));
+    await waiting;
+    await new Promise(resolve => setTimeout(resolve, 40));
+    try { assert.equal(calls, 1); } finally { release(); }
+    assert((await requests).every(response => response.status === 200));
+    f.revoke();
+    assert.equal((await f.request('/api/tickets')).status, 403);
+    assert.equal(calls, 2);
+});
+
+test('temporary bot membership failures deny access without losing the signed-in session', async t => {
+    const f = await fixture(t); await f.login();
+    const original = f.guild.members.fetch;
+    f.guild.members.fetch = async () => { throw Object.assign(new Error('private response with secret-token'), { code: 50001, status: 403 }); };
+    assert.equal((await f.request('/api/session')).status, 503);
+    assert.equal(f.logs.at(-1)[1].code, 50001);
+    assert(!JSON.stringify(f.logs).includes('secret-token'));
+    f.guild.members.fetch = original;
+    const session = await (await f.request('/api/session')).json();
+    assert.equal(session.user.id, ids.user);
+    f.guild.members.fetch = async () => { throw new Error('Discord temporarily unavailable'); };
+    assert.equal((await f.request('/auth/logout', { method: 'POST', headers: { Origin: f.settings.publicBaseUrl, 'X-CSRF-Token': session.csrfToken } })).status, 204);
+});
+
+test('private-data erasure revokes the user persistent dashboard sessions', async t => {
+    const f = await fixture(t); await f.login();
+    f.store.deleteUser(ids.user);
+    assert.equal((await f.request('/api/session')).status, 401);
+});
+
+test('persistent login survives app restart with no stored OAuth token or repeat consent', async t => {
+    const f = await fixture(t);
+    const login = await f.login();
+    const cookieHeader = login.headers.getSetCookie().at(-1);
+    assert(cookieHeader.includes('HttpOnly')); assert(cookieHeader.includes('SameSite=Lax'));
+    const expires = Date.parse(cookieHeader.match(/Expires=([^;]+)/)[1]);
+    assert(expires > Date.now() + 29 * 86_400_000);
+    const sessionKeys = f.store.keys().filter(key => key.startsWith('session:'));
+    const stored = sessionKeys.map(key => f.store.read(key)).find(row => row.data?.user);
+    assert.equal(stored.data.user.id, ids.user);
+    assert.equal(stored.data.accessToken, undefined);
+    assert.equal(stored.data.refreshToken, undefined);
+    f.app.locals.close();
+    const restarted = createApp({ service: f.service, settings: f.settings, fetchImpl: async () => assert.fail('A remembered login must not call OAuth'), logger: { warn() {} } });
+    const server = restarted.listen(0, '127.0.0.1');
+    await new Promise(resolve => server.once('listening', resolve));
+    t.after(async () => { restarted.locals.close(); await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }); });
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/session`, { headers: { Cookie: f.cookie() } });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).user.id, ids.user);
+    f.revoke();
+    assert.equal((await fetch(`http://127.0.0.1:${server.address().port}/api/tickets`, { headers: { Cookie: f.cookie() } })).status, 403);
+});
+
 test('SSE sends a snapshot revision and is cleaned up when the client disconnects', async t => {
     const f = await fixture(t); await f.login();
     const controller = new AbortController();
@@ -107,6 +173,28 @@ test('SSE sends a snapshot revision and is cleaned up when the client disconnect
         const next = await Promise.race([reader.read(), new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('Live event did not arrive')), 2000); timer.unref(); })]);
         assert.equal(next.done, false);
         assert(new TextDecoder().decode(next.value).includes('event: tickets'));
+    } finally { controller.abort(); }
+});
+
+test('a temporary stream authorization failure closes the stream without signing the user out', { timeout: 3000 }, async t => {
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    const f = await fixture(t); await f.login();
+    const controller = new AbortController();
+    const response = await f.request('/api/events', { signal: controller.signal });
+    try {
+        const reader = response.body.getReader();
+        let output = new TextDecoder().decode((await reader.read()).value);
+        const original = f.guild.members.fetch;
+        f.guild.members.fetch = async () => { throw Object.assign(new Error('Temporary Discord outage'), { status: 503 }); };
+        t.mock.timers.tick(15_000);
+        while (true) {
+            const item = await reader.read();
+            if (item.done) break;
+            output += new TextDecoder().decode(item.value);
+        }
+        assert(!output.includes('session-expired'));
+        f.guild.members.fetch = original;
+        assert.equal((await f.request('/api/session')).status, 200);
     } finally { controller.abort(); }
 });
 
@@ -174,7 +262,7 @@ test('web chat requires both feature flags and respects ticket exclusions', asyn
 test('staff web actions enforce CSRF, fresh roles, scope and the fixed action allowlist', async t => {
     const f = await fixture(t); await f.login();
     const calls = [];
-    const guild = { id: ids.guild };
+    const guild = f.guild;
     f.service.client.guilds = { fetch: async id => { assert.equal(id, ids.guild); return guild; } };
     f.service.action = async (...args) => { calls.push(args); f.store.upsert({ threadId: ids.ticket, archived: true }); };
     const session = await (await f.request('/api/session')).json();

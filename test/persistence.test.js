@@ -7,21 +7,31 @@ const { randomBytes } = require('node:crypto');
 const Enmap = require('enmap');
 const { TicketStore } = require('../tickets');
 const { importLegacy } = require('../legacy');
+const { EncryptedSessionStore } = require('../session-store');
 
-test('real SQLite/Enmap adapter persists encrypted records across restart', () => {
+test('real SQLite/Enmap adapter persists encrypted records and login sessions across restart', async () => {
     const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'tickets-db-'));
     const key = randomBytes(32).toString('base64');
-    let db;
+    let db; let sessions;
     try {
         db = new Enmap({ name: 'privateTickets', dataDir: dir, fetchAll: false, autoFetch: true });
         let store = new TicketStore(db, key);
         store.upsert({ threadId: '120000000000000001', openerId: '120000000000000002', description: 'sensitive ticket fixture' });
+        sessions = new EncryptedSessionStore(store);
+        await new Promise((resolve, reject) => sessions.set('persistent-session-fixture', { user: { id: '120000000000000002' }, csrfToken: 'private-csrf-fixture', cookie: {} }, error => error ? reject(error) : resolve()));
+        sessions.stopInterval();
         db.close(); db = null;
         assert(!fs.readFileSync(path.join(dir, 'enmap.sqlite')).includes(Buffer.from('sensitive ticket fixture')));
+        assert(!fs.readFileSync(path.join(dir, 'enmap.sqlite')).includes(Buffer.from('persistent-session-fixture')));
+        assert(!fs.readFileSync(path.join(dir, 'enmap.sqlite')).includes(Buffer.from('private-csrf-fixture')));
         db = new Enmap({ name: 'privateTickets', dataDir: dir, fetchAll: false, autoFetch: true });
         store = new TicketStore(db, key);
         assert.equal(store.get('120000000000000001').description, 'sensitive ticket fixture');
-    } finally { db?.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+        sessions = new EncryptedSessionStore(store);
+        const restored = await new Promise((resolve, reject) => sessions.get('persistent-session-fixture', (error, data) => error ? reject(error) : resolve(data)));
+        assert.equal(restored.user.id, '120000000000000002');
+        assert.equal(restored.csrfToken, 'private-csrf-fixture');
+    } finally { sessions?.stopInterval(); db?.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('verified legacy retirement removes old plaintext only after encrypted persistence', async () => {

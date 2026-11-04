@@ -1,6 +1,6 @@
 const express = require('express');
 const session = require('express-session');
-const MemoryStore = require('memorystore')(session);
+const { EncryptedSessionStore, SESSION_MAX_AGE } = require('./session-store');
 const { randomBytes, timingSafeEqual } = require('node:crypto');
 const path = require('node:path');
 const { existsSync } = require('node:fs');
@@ -12,13 +12,14 @@ function sameToken(a, b) {
     return typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
-function createApp({ service, settings, fetchImpl = fetch, sessionStore, staticDir = path.join(__dirname, 'web', 'dist') }) {
+function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger = console, staticDir = path.join(__dirname, 'web', 'dist') }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
-    const store = sessionStore || new MemoryStore({ checkPeriod: 60_000, ttl: 24 * 60 * 60_000, max: 1000 });
+    const store = sessionStore || new EncryptedSessionStore(service.store, { logger });
     const streams = new Set();
     const attempts = new Map();
+    const memberChecks = new Map();
     const secure = !settings.development;
     const cookieName = secure ? '__Host-tickets' : 'tickets.dev';
     app.use((req, res, next) => {
@@ -46,7 +47,7 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, staticD
     app.use(session({
         name: cookieName, secret: settings.sessionSecret || randomBytes(48).toString('hex'), store,
         resave: false, saveUninitialized: false, rolling: true,
-        cookie: { secure, httpOnly: true, sameSite: 'lax', maxAge: 24 * 60 * 60_000, path: '/' },
+        cookie: { secure, httpOnly: true, sameSite: 'lax', maxAge: SESSION_MAX_AGE, path: '/' },
     }));
     app.use(express.json({ limit: '16kb', strict: true }));
 
@@ -60,20 +61,31 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, staticD
         }
         return response.json();
     }
-    async function authorized(data, force = false) {
-        if (!data?.user || !data.accessToken || data.expiresAt <= Date.now()) {
+    async function authorized(data) {
+        if (!data?.user || !ID.test(data.user.id || '')) {
             const error = new Error('Your session has expired.'); error.status = 401; throw error;
         }
-        if (force || !data.checkedAt || Date.now() - data.checkedAt >= 15_000) {
-            const member = await discord(`/users/@me/guilds/${settings.guildId}/member`, data.accessToken);
-            if (member.user?.id !== data.user.id || !member.roles?.includes(settings.supportRoleId)) {
-                const error = new Error('Staff authorization required.'); error.status = 403; throw error;
-            }
-            data.checkedAt = Date.now();
+        let check = memberChecks.get(data.user.id);
+        if (!check) {
+            check = Promise.resolve().then(async () => {
+                const guild = await service.client.guilds.fetch(settings.guildId);
+                if (guild.id !== settings.guildId) throw new Error('Unexpected authorization guild.');
+                return guild.members.fetch({ user: data.user.id, force: true, cache: false });
+            }).finally(() => memberChecks.delete(data.user.id));
+            memberChecks.set(data.user.id, check);
+        }
+        let member;
+        try { member = await check; }
+        catch (error) {
+            logger.warn('Dashboard Discord member verification failed.', { status: Number.isFinite(error.status) ? error.status : 503, ...(Number.isFinite(error.code) ? { code: error.code } : {}) });
+            throw Object.assign(new Error('Discord member verification unavailable.'), { status: Number(error.code) === 10007 ? 403 : 503 });
+        }
+        if (member.id !== data.user.id || !member.roles?.cache?.has(settings.supportRoleId)) {
+            const error = new Error('Staff authorization required.'); error.status = 403; throw error;
         }
     }
     const requireStaff = asyncRoute(async (req, res, next) => {
-        try { await authorized(req.session, true); next(); }
+        try { await authorized(req.session); next(); }
         catch (error) {
             if ([401, 403].includes(error.status)) req.session.destroy(() => {});
             res.status(error.status || 503).json({ error: error.status === 403 ? 'Only authorized support staff can access this dashboard.' : error.status === 401 ? 'Your session has expired. Sign in with Discord.' : 'Could not verify Discord permissions. Please retry.' });
@@ -93,7 +105,7 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, staticD
         attempt.count += 1; attempts.set(req.ip, attempt);
         req.session.oauthState = randomBytes(32).toString('hex');
         req.session.oauthStartedAt = time;
-        const query = new URLSearchParams({ client_id: settings.clientId, response_type: 'code', redirect_uri: `${settings.publicBaseUrl}/auth/discord/callback`, scope: 'identify guilds.members.read', state: req.session.oauthState });
+        const query = new URLSearchParams({ client_id: settings.clientId, response_type: 'code', redirect_uri: `${settings.publicBaseUrl}/auth/discord/callback`, scope: 'identify', state: req.session.oauthState });
         req.session.save(error => error ? res.status(503).json({ error: 'Could not start sign-in.' }) : res.redirect(`https://discord.com/oauth2/authorize?${query}`));
     });
     app.get('/auth/discord/callback', asyncRoute(async (req, res) => {
@@ -106,14 +118,14 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, staticD
         if (typeof token.access_token !== 'string' || !Number.isFinite(token.expires_in) || token.expires_in <= 0) throw new Error('Invalid OAuth response.');
         const user = await discord('/users/@me', token.access_token);
         if (!ID.test(user.id || '')) throw new Error('Invalid OAuth identity.');
-        const data = { user: { id: user.id, username: user.username }, accessToken: token.access_token, expiresAt: Date.now() + Math.min(token.expires_in * 1000, 24 * 60 * 60_000) };
-        await authorized(data, true);
+        const data = { user: { id: user.id, username: user.username } };
+        await authorized(data);
         await new Promise((resolve, reject) => req.session.regenerate(error => error ? reject(error) : resolve()));
         Object.assign(req.session, data, { csrfToken: randomBytes(32).toString('hex') });
         await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve()));
         res.redirect('/');
     }));
-    app.post('/auth/logout', requireStaff, csrf, (req, res) => {
+    app.post('/auth/logout', csrf, (req, res) => {
         const sessionId = req.sessionID;
         req.session.destroy(error => {
             if (error) return res.status(503).json({ error: 'Sign-out failed. Please retry.' });
@@ -148,7 +160,6 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, staticD
         res.json({ messages: messages.slice(0, 50), nextBefore: messages.length > 50 ? messages[49].id : null, available: true, reason: null });
     });
     app.post('/api/tickets/:ticketId/actions', csrf, asyncRoute(async (req, res) => {
-        await authorized(req.session, true);
         const { action, reason = '' } = req.body || {};
         if (!['close', 'close-lock', 'reopen', 'escalate', 'resolve-escalation'].includes(action) || typeof reason !== 'string' || reason.length > 500) return res.status(400).json({ error: 'Invalid ticket action or reason.' });
         if (req.ticket.status === 'deleted') return res.status(409).json({ error: 'Deleted tickets cannot be modified.' });
@@ -175,10 +186,13 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, staticD
             if (checking) return; checking = true;
             try {
                 const current = await new Promise((resolve, reject) => store.get(entry.sessionId, (error, data) => error ? reject(error) : resolve(data)));
-                await authorized(current, true);
+                await authorized(current);
                 if (res.writableLength > 64 * 1024) return close();
                 res.write(': heartbeat\n\n');
-            } catch { send('session-expired', { error: 'Session expired or access revoked.' }); close(); }
+            } catch (error) {
+                if ([401, 403].includes(error.status)) send('session-expired', { error: 'Session expired or access revoked.' });
+                close();
+            }
             finally { checking = false; }
         }, 15_000);
         service.on('tickets', invalidate); service.on('sync', sync); streams.add(entry);

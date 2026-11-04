@@ -38,7 +38,7 @@ async function main() {
         partials: [Partials.Message, Partials.Channel], allowedMentions: { parse: [], repliedUser: false },
     });
     const service = new TicketService(client, store, settings, { logger });
-    const app = createApp({ service, settings });
+    const app = createApp({ service, settings, logger });
     const http = app.listen(settings.port, settings.host);
     let tunnel; let initialized = false; let interval; let retentionInterval; let shuttingDown = false;
     const purgeLegacy = id => { const key = `ticket_${id}`; if (legacy.has(key)) legacy.delete(key); };
