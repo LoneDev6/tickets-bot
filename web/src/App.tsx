@@ -151,7 +151,7 @@ function SyncNotice({ sync, connection, onReconnect }: { sync: SyncState; connec
       <Alert>
         <AlertTitle>Live updates disconnected</AlertTitle>
         <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
-          <span>The page will try to reconnect. Last updated: {formatDate(sync.updatedAt)}.</span>
+          <span>The page will try to reconnect. Last synchronized: {formatDate(sync.updatedAt)}.</span>
           <Button variant="outline" size="sm" onClick={onReconnect}>
             <RefreshCw /> Reconnect
           </Button>
@@ -159,7 +159,7 @@ function SyncNotice({ sync, connection, onReconnect }: { sync: SyncState; connec
       </Alert>
     )
   }
-  return <p className="text-sm text-muted-foreground">Last updated: {formatDate(sync.updatedAt)}</p>
+  return <p className="text-sm text-muted-foreground">Last synchronized: {formatDate(sync.updatedAt)}</p>
 }
 
 function App() {
@@ -509,7 +509,7 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
         <Select value={sort} onValueChange={(value) => changeFilter("sort", value)}>
           <SelectTrigger aria-label="Sort tickets"><SelectValue placeholder="Sort by" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="updated">Recently updated</SelectItem>
+            <SelectItem value="updated">Latest message</SelectItem>
             <SelectItem value="created">Recently created</SelectItem>
             <SelectItem value="priority">Escalated first</SelectItem>
           </SelectContent>
@@ -535,7 +535,7 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
                     <TableCell>{ticketTypeLabel(ticket.type)}</TableCell>
                     <TableCell>{statusBadge(ticket.status)}</TableCell>
                     <TableCell>{ticket.lastMessageAuthorName ?? "—"}<p className="mt-1 text-xs text-muted-foreground">{formatDate(ticket.lastMessageAt)}</p></TableCell>
-                    <TableCell className="whitespace-nowrap">{formatDate(ticket.updatedAt)}</TableCell>
+                    <TableCell className="whitespace-nowrap">{formatDate(ticket.lastMessageAt)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -546,7 +546,7 @@ function TicketsPage({ revision, onSync, onUnauthorized }: { revision: number | 
               <li key={ticket.threadId} className="min-w-0 cursor-pointer p-4 hover:bg-muted/50" onClick={openTicketRow}>
                 <TicketPreview ticket={ticket} href={hrefFor(ticket)} />
                 <div className="mt-3 text-sm text-muted-foreground"><TicketOwner ticket={ticket} /></div>
-                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">{statusBadge(ticket.status)}<Badge variant="outline">{ticketTypeLabel(ticket.type)}</Badge>{ticket.escalatedAt && <Badge variant="destructive">Escalated</Badge>}<span className="text-xs text-muted-foreground">Updated {formatDate(ticket.updatedAt)}</span></div>
+                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">{statusBadge(ticket.status)}<Badge variant="outline">{ticketTypeLabel(ticket.type)}</Badge>{ticket.escalatedAt && <Badge variant="destructive">Escalated</Badge>}<span className="text-xs text-muted-foreground">Updated {formatDate(ticket.lastMessageAt)}</span></div>
               </li>
             ))}
           </ul>
@@ -712,7 +712,7 @@ function TicketDetail({ id, session, revision, sync, onUnauthorized }: { id: str
           <Separator />
           <dl className="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
             <Metadata label="Created" value={formatDate(item.createdAt)} />
-            <Metadata label="Last updated" value={formatDate(item.updatedAt)} />
+            <Metadata label="Last updated" value={formatDate(item.lastMessageAt)} />
             <Metadata label="Last status change" value={formatDate(item.statusChangedAt)} />
             <Metadata label="Last message" value={`${item.lastMessageAuthorName ?? "—"} · ${item.lastMessageAuthorId ?? "—"} · ${formatDate(item.lastMessageAt)}`} />
             <Metadata label="Added users" value={item.joinedUserIds.length ? item.joinedUserIds.join(", ") : "None"} />

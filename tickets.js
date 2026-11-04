@@ -135,7 +135,7 @@ class TicketStore extends EventEmitter {
             && (!owner || (ID.test(owner) ? ticket.openerId === owner : [ticket.openerName, ticketOpenerName(ticket)].some(value => String(value || '').toLocaleLowerCase().includes(owner))))
             && (!query || [ticket.threadId, ticket.name, ticket.openerId, ticket.openerName, ticket.description]
                 .some(value => String(value || '').toLocaleLowerCase().includes(query))));
-        const field = sort === 'created' ? 'createdAt' : 'updatedAt';
+        const field = sort === 'created' ? 'createdAt' : 'lastMessageAt';
         tickets.sort((a, b) => (sort === 'priority' ? Number(Boolean(b.escalatedAt)) - Number(Boolean(a.escalatedAt)) : 0) || (b[field] || 0) - (a[field] || 0) || b.threadId.localeCompare(a.threadId));
         const offset = cursor ? tickets.findIndex(ticket => ticket.threadId === cursor) + 1 : (page - 1) * pageSize;
         if (cursor && !offset) throw Object.assign(new Error('The ticket list changed. Reload the results.'), { status: 409 });

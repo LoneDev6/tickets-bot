@@ -119,6 +119,27 @@ test('owner lookup uses exact IDs or mentions, and escalation sorting works acro
     assert.equal(store.list({ opener: '120000000000000099' }).total, 0);
 });
 
+test('latest-message ordering ignores import and staff updates and keeps unknown dates last', () => {
+    let now = 100 * DAY;
+    const store = new TicketStore(new Map(), key, { now: () => now });
+    const older = ticketId;
+    const newer = '120000000000000009';
+    const unknown = '120000000000000099';
+    store.upsert({ ...base, threadId: newer, createdAt: 10, lastMessageAt: 200 });
+    now++;
+    store.upsert({ ...base, threadId: older, createdAt: 20, lastMessageAt: 100 });
+    now++;
+    store.upsert({ ...base, threadId: unknown, createdAt: 30 });
+    now++;
+    store.upsert({ threadId: older, name: 'Renamed by staff', escalatedAt: now });
+    assert.deepEqual(store.list({ sort: 'updated' }).tickets.map(ticket => ticket.threadId), [newer, older, unknown]);
+    assert.deepEqual(store.list({ sort: 'created' }).tickets.map(ticket => ticket.threadId), [unknown, older, newer]);
+    assert.deepEqual(store.list({ sort: 'priority' }).tickets.map(ticket => ticket.threadId), [older, newer, unknown]);
+    store.upsert({ threadId: older, lastMessageAt: 300 });
+    assert.equal(store.list().tickets[0].threadId, older);
+    assert.equal(store.get(unknown).lastMessageAt, null);
+});
+
 test('observed aggregate metrics are idempotent, encrypted, persistent and survive ticket retention', () => {
     let now = Date.UTC(2026, 10, 4, 12);
     const database = new Map();

@@ -18,6 +18,8 @@ Il frontend usa il registry ufficiale shadcn (`radix-nova`, base `neutral`) con 
 
 La navigazione tra elenco, dettaglio e privacy e i pulsanti Retry sono gestiti da React senza ricaricare il documento. URL e cronologia del browser restano utilizzabili. Gli aggiornamenti live mantengono visibili le righe e le pagine già caricate mentre recuperano i dati aggiornati.
 
+La data Updated del ticket è quella dell’ultimo messaggio Discord, anche nell’ordinamento Latest message (`sort=updated` per compatibilità API). Importazione, sincronizzazione e azioni dello staff non la sostituiscono. Se manca viene mostrato `—`; la sincronizzazione ha una data separata, Last synchronized.
+
 L’elenco mostra l’anteprima del messaggio iniziale con ellissi e scorrimento su hover/focus (rispettando le preferenze di movimento ridotto). Il clic sulla riga apre i dettagli. Nome e avatar provengono dalla cache Discord del bot; se manca il nome, si usa quello salvato o il vecchio titolo quando l’ID coincide. Gli avatar mancanti mostrano le iniziali. Le azioni sono accanto a Open in Discord e aprono un Dialog fullscreen per motivo opzionale e conferma: non viene inviata alcuna azione prima della conferma.
 
 ## Configurazione
