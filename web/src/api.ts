@@ -14,7 +14,7 @@ export type Session = {
     canReadConversation: boolean
     canArchiveConversation: boolean
     canReply: false
-    canManageTicket: false
+    canManageTicket: boolean
     reason: string
   }
   sync: SyncState
@@ -42,6 +42,9 @@ export type Ticket = {
   recordedParticipantsOnly: boolean
   contentExcluded: boolean
   imported: boolean
+  escalatedAt: number | null
+  escalatedBy: string | null
+  escalationReason: string | null
 }
 
 export type TicketList = {
@@ -52,6 +55,7 @@ export type TicketList = {
   counts: Record<TicketStatus, number>
   revision: number
   sync: SyncState
+  nextCursor: string | null
 }
 
 export type TicketMessage = {
@@ -95,13 +99,33 @@ export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> 
     response = await fetch(path, { signal, headers: { Accept: "application/json" } })
   } catch (error) {
     if (signal?.aborted) throw error
-    throw new ApiError("Connessione al server non disponibile. Riprova.", 503)
+    throw new ApiError("The server connection is unavailable. Please try again.", 503)
   }
   if (!response.ok) {
-    let message = `Errore ${response.status}`
+    let message = `Error ${response.status}`
     try {
       const body = (await response.json()) as { error?: string }
       if (body.error) message = body.error
+    } catch {
+      // Keep the HTTP status when the server does not return a JSON error body.
+    }
+    throw new ApiError(message, response.status)
+  }
+  return (await response.json()) as T
+}
+
+export async function apiPost<T>(path: string, csrfToken: string, body: unknown): Promise<T> {
+  let response: Response
+  try {
+    response = await fetch(path, { method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json", "X-CSRF-Token": csrfToken }, body: JSON.stringify(body) })
+  } catch {
+    throw new ApiError("The server connection is unavailable. Please try again.", 503)
+  }
+  if (!response.ok) {
+    let message = `Error ${response.status}`
+    try {
+      const result = (await response.json()) as { error?: string }
+      if (result.error) message = result.error
     } catch {
       // Keep the HTTP status when the server does not return a JSON error body.
     }

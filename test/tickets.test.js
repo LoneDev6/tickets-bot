@@ -87,6 +87,42 @@ test('filters and paging apply to the whole dataset', () => {
     assert.equal(store.list({ q: 'ticket 29' }).total, 1);
 });
 
+test('owner lookup uses exact IDs or mentions, and escalation sorting works across cursor pages', () => {
+    const store = new TicketStore(new Map(), key);
+    for (let i = 0; i < 35; i++) store.upsert({ ...base, threadId: String(BigInt(ticketId) + BigInt(i)), openerName: i % 2 ? 'Alice' : 'Bob' });
+    store.upsert({ threadId: ticketId, escalatedAt: Date.now() });
+    const first = store.list({ opener: `<@${userId}>`, sort: 'priority', pageSize: 10 });
+    assert.equal(first.tickets[0].threadId, ticketId);
+    const next = store.list({ opener: userId, sort: 'priority', pageSize: 10, cursor: first.nextCursor });
+    assert.equal(new Set([...first.tickets, ...next.tickets].map(item => item.threadId)).size, 20);
+    assert.equal(store.list({ opener: 'ALICE' }).total, 17);
+    assert.equal(store.list({ opener: '120000000000000099' }).total, 0);
+});
+
+test('observed aggregate metrics are idempotent, encrypted, persistent and survive ticket retention', () => {
+    let now = Date.UTC(2026, 10, 4, 12);
+    const database = new Map();
+    const store = new TicketStore(database, key, { now: () => now });
+    const input = { ...base, createdAt: now };
+    store.upsert(input); store.upsert(input);
+    store.upsert({ ...base, threadId: '120000000000000099', createdAt: now - 100 * DAY, archived: true }, { imported: true });
+    store.upsert({ threadId: ticketId, archived: true, locked: true });
+    store.upsert({ threadId: ticketId, archived: false, locked: false });
+    store.upsert({ threadId: ticketId, escalatedAt: now });
+    store.upsert({ threadId: ticketId, deletedAt: now });
+    const expected = { opened: 1, discovered: 1, closed: 1, locked: 1, reopened: 1, deleted: 1, escalated: 1 };
+    assert.deepEqual(store.statistics.query().totals, expected);
+    const restarted = new TicketStore(database, key, { now: () => now });
+    assert.deepEqual(restarted.statistics.query().totals, expected);
+    assert(!JSON.stringify([...database]).includes('opened'));
+    now += 31 * DAY; restarted.expire();
+    assert.equal(restarted.get(ticketId), null);
+    const historic = restarted.statistics.query({ from: '2026-11-04', to: '2026-11-04' });
+    assert.deepEqual(historic.totals, expected);
+    assert(!JSON.stringify(historic).includes(userId));
+    assert(!JSON.stringify(historic).includes(ticketId));
+});
+
 test('server inventory discovers active and paginated private archives with no old database or cards', async () => {
     const settings = { guildId: base.guildId, ticketParentId: base.parentId };
     const now = Date.now();

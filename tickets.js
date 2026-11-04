@@ -1,5 +1,6 @@
 const { EventEmitter } = require('node:events');
 const { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } = require('node:crypto');
+const { Statistics } = require('./statistics');
 
 const DAY = 86_400_000;
 const ID = /^\d{16,22}$/;
@@ -27,6 +28,7 @@ class TicketStore extends EventEmitter {
             this.write('meta:key-check', { version: 1 });
         }
         this.revision = this.read('meta:revision') || 0;
+        this.statistics = new Statistics(this);
     }
 
     keys() {
@@ -89,7 +91,7 @@ class TicketStore extends EventEmitter {
             statusChangedAt: time, lastMessageId: null, lastMessageAuthorId: null, lastMessageAuthorName: null,
             lastMessageAt: null, lastHumanMessageId: null, lastHumanMessageAuthorId: null,
             lastHumanMessageAt: null, joinedUserIds: [], verificationThreadId: null, lastAction: null,
-            imported, contentExcluded: false, ...previous, ...input,
+            imported, contentExcluded: false, escalatedAt: null, escalatedBy: null, escalationReason: null, ...previous, ...input,
         };
         record.status = ticketStatus(record);
         const transitioned = previous && previous.status !== record.status;
@@ -106,6 +108,15 @@ class TicketStore extends EventEmitter {
         if (previous && comparable(previous) === comparable(record)) return previous;
         record.updatedAt = time;
         this.write(`t:${this.index(record.threadId)}`, record);
+        if (!previous) {
+            this.statistics.record(!imported && (record.createdAt ?? time) >= this.read('meta:statistics-started') ? 'opened' : 'discovered');
+        } else {
+            if (previous.status === 'open' && ['closed', 'locked'].includes(record.status)) this.statistics.record('closed');
+            if (!previous.locked && record.locked) this.statistics.record('locked');
+            if (previous.status !== 'open' && record.status === 'open') this.statistics.record('reopened');
+            if (previous.status !== 'deleted' && record.status === 'deleted') this.statistics.record('deleted');
+        }
+        if (!previous?.escalatedAt && record.escalatedAt) this.statistics.record('escalated');
         this.changed();
         return record;
     }
@@ -116,15 +127,20 @@ class TicketStore extends EventEmitter {
         return counts;
     }
 
-    list({ status = 'open', type = 'all', q = '', sort = 'updated', page = 1, pageSize = 25 } = {}) {
+    list({ status = 'open', type = 'all', q = '', opener = '', sort = 'updated', page = 1, pageSize = 25, cursor } = {}) {
         const query = q.toLocaleLowerCase();
+        const owner = opener.trim().replace(/^<@!?(\d{16,22})>$/, '$1').toLocaleLowerCase();
         const tickets = this.all().filter(ticket => (status === 'all' || ticket.status === status)
             && (type === 'all' || ticket.type === type)
+            && (!owner || (ID.test(owner) ? ticket.openerId === owner : [ticket.openerName, ticket.name?.match(/^(?:Generic|Payment):\s*(.+?)\s*\(\d{16,22}\)$/i)?.[1]].some(value => String(value || '').toLocaleLowerCase().includes(owner))))
             && (!query || [ticket.threadId, ticket.name, ticket.openerId, ticket.openerName, ticket.description]
                 .some(value => String(value || '').toLocaleLowerCase().includes(query))));
         const field = sort === 'created' ? 'createdAt' : 'updatedAt';
-        tickets.sort((a, b) => (b[field] || 0) - (a[field] || 0) || b.threadId.localeCompare(a.threadId));
-        return { tickets: tickets.slice((page - 1) * pageSize, page * pageSize), total: tickets.length, page, pageSize, counts: this.counts(), revision: this.revision };
+        tickets.sort((a, b) => (sort === 'priority' ? Number(Boolean(b.escalatedAt)) - Number(Boolean(a.escalatedAt)) : 0) || (b[field] || 0) - (a[field] || 0) || b.threadId.localeCompare(a.threadId));
+        const offset = cursor ? tickets.findIndex(ticket => ticket.threadId === cursor) + 1 : (page - 1) * pageSize;
+        if (cursor && !offset) throw Object.assign(new Error('The ticket list changed. Reload the results.'), { status: 409 });
+        const slice = tickets.slice(offset, offset + pageSize);
+        return { tickets: slice, total: tickets.length, page, pageSize, counts: this.counts(), revision: this.revision, nextCursor: offset + slice.length < tickets.length ? slice.at(-1)?.threadId || null : null };
     }
 
     messagePrefix(threadId) {
@@ -200,6 +216,7 @@ class TicketStore extends EventEmitter {
                 if (ticket.lastMessageAuthorId === userId) Object.assign(update, { lastMessageAuthorId: null, lastMessageAuthorName: null, lastMessageId: null, lastMessageAt: null });
                 if (ticket.lastHumanMessageAuthorId === userId) Object.assign(update, { lastHumanMessageAuthorId: null, lastHumanMessageId: null, lastHumanMessageAt: null });
                 if (ticket.lastAction?.actorId === userId) update.lastAction = { ...ticket.lastAction, actorId: null };
+                if (ticket.escalatedBy === userId) Object.assign(update, { escalatedBy: null, escalationReason: null });
                 this.upsert(update);
             }
         }

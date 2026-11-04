@@ -24,6 +24,7 @@ class TicketService extends EventEmitter {
         this.logger = logger;
         this.sync = { ready: false, updatedAt: null, error: null };
         this.busyUsers = new Set();
+        this.busyTickets = new Set();
         this.summaryTimer = null;
         this.summaryRunning = false;
         this.summaryPending = false;
@@ -38,9 +39,9 @@ class TicketService extends EventEmitter {
     capabilities() {
         const enabled = this.settings.messageContentApproved;
         return {
-            canReadConversation: enabled, canArchiveConversation: enabled,
-            canReply: false, canManageTicket: false,
-            reason: enabled ? 'Risposta e gestione web non ancora abilitate. Usa Discord.' : 'Conversazione, risposta e gestione web in attesa dell’autorizzazione Discord.',
+            canReadConversation: Boolean(enabled && this.settings.webChatEnabled), canArchiveConversation: enabled,
+            canReply: false, canManageTicket: true,
+            reason: !enabled ? 'Web chat is unavailable until Discord Message Content access is approved.' : !this.settings.webChatEnabled ? 'Web chat is disabled. Open this ticket in Discord.' : 'Replies are currently available in Discord.',
         };
     }
 
@@ -69,7 +70,7 @@ class TicketService extends EventEmitter {
     async staff(member) {
         if (!member || member.guild?.id !== this.settings.guildId) return false;
         const fresh = await member.guild.members.fetch({ user: member.id, force: true });
-        return fresh.id === this.settings.ownerId || fresh.roles.cache.has(this.settings.supportRoleId);
+        return fresh.roles.cache.has(this.settings.supportRoleId);
     }
 
     async thread(threadId) {
@@ -80,23 +81,42 @@ class TicketService extends EventEmitter {
     }
 
     async action(threadId, action, member, reason = '') {
-        const thread = await this.thread(threadId);
-        const staff = await this.staff(member);
-        const ticket = this.store.get(threadId) || this.recordThread(thread);
-        if (!staff && !(action === 'close' && ticket?.openerId === member.id)) throw new Error('You are not authorized to perform this action.');
-        if (!['close', 'lock', 'reopen', 'rename'].includes(action)) throw new Error('Invalid ticket action.');
-        let updated;
-        if (action === 'rename') {
-            if (!reason.trim() || reason.length > 100) throw new Error('The name must contain between 1 and 100 characters.');
-            updated = await thread.setName(reason.trim());
-        } else if (action === 'reopen') {
-            updated = await thread.edit({ locked: false, archived: false }, 'Reopened by support');
-        } else {
-            updated = await thread.edit({ archived: true, ...(action === 'lock' ? { locked: true } : {}) }, reason || 'No reason.');
-        }
-        this.recordThread(updated);
-        this.store.upsert({ threadId, lastAction: { action, actorId: member.id, reason: reason || null, at: Date.now() } });
-        return thread;
+        if (!['close', 'lock', 'close-lock', 'reopen', 'rename', 'escalate', 'resolve-escalation'].includes(action)) throw Object.assign(new Error('Invalid ticket action.'), { status: 400 });
+        if (typeof reason !== 'string' || reason.length > (action === 'rename' ? 100 : 500)) throw Object.assign(new Error('Invalid action reason.'), { status: 400 });
+        if (this.busyTickets.has(threadId)) throw Object.assign(new Error('Another action is in progress for this ticket.'), { status: 409 });
+        this.busyTickets.add(threadId);
+        try {
+            const thread = await this.thread(threadId);
+            const staff = await this.staff(member);
+            const ticket = this.store.get(threadId) || this.recordThread(thread);
+            if (!ticket) throw Object.assign(new Error('This ticket is no longer retained.'), { status: 404 });
+            if (!staff && !(action === 'close' && ticket?.openerId === member.id)) throw Object.assign(new Error('You are not authorized to perform this action.'), { status: 403 });
+            if (action === 'escalate' || action === 'resolve-escalation') {
+                if (action === 'escalate') {
+                    if (thread.archived || thread.locked) throw Object.assign(new Error('Reopen the ticket before escalating it.'), { status: 409 });
+                    if (ticket.escalatedAt) return thread;
+                    if (!ID.test(this.settings.ownerId || '')) throw Object.assign(new Error('The server owner is not configured.'), { status: 409 });
+                    await thread.members.add(this.settings.ownerId);
+                    await thread.send({ content: `<@${this.settings.ownerId}> Support has escalated this ticket for your attention.`, allowedMentions: { parse: [], users: [this.settings.ownerId] } });
+                }
+                this.store.upsert({ threadId, escalatedAt: action === 'escalate' ? Date.now() : null, escalatedBy: action === 'escalate' ? member.id : null,
+                    escalationReason: action === 'escalate' ? reason.trim() || null : null,
+                    lastAction: { action, actorId: member.id, reason: reason.trim() || null, at: Date.now() } });
+                return thread;
+            }
+            let updated;
+            if (action === 'rename') {
+                if (!reason.trim() || reason.length > 100) throw new Error('The name must contain between 1 and 100 characters.');
+                updated = await thread.setName(reason.trim());
+            } else if (action === 'reopen') {
+                updated = await thread.edit({ locked: false, archived: false }, 'Reopened by support');
+            } else {
+                updated = await thread.edit({ archived: true, ...(['lock', 'close-lock'].includes(action) ? { locked: true } : {}) }, reason || 'No reason.');
+            }
+            this.recordThread(updated);
+            this.store.upsert({ threadId, ...(['close', 'lock', 'close-lock'].includes(action) ? { escalatedAt: null, escalatedBy: null, escalationReason: null } : {}), lastAction: { action, actorId: member.id, reason: reason || null, at: Date.now() } });
+            return thread;
+        } finally { this.busyTickets.delete(threadId); }
     }
 
     async create(interaction, type, description) {
@@ -124,7 +144,8 @@ class TicketService extends EventEmitter {
                     embeds: [new EmbedBuilder().setTitle('Ticket Information').setDescription(`**Type:** ${type}\n**Description:** ${description}`).setColor('#0099FF')],
                     components: [new ActionRowBuilder().addComponents(
                         new ButtonBuilder().setCustomId('ticket_panel_close_thread').setLabel('Close').setStyle(ButtonStyle.Danger),
-                        new ButtonBuilder().setCustomId('ticket_panel_lock_thread').setLabel('Lock').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId('ticket_panel_lock_thread').setLabel('Close & lock').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId('ticket_panel_escalate_thread').setLabel('Escalate to owner').setStyle(ButtonStyle.Secondary),
                     )], allowedMentions: { parse: [] },
                 });
                 const markets = ['SpigotMC', 'BuiltByBit', 'Polymart'];
@@ -265,7 +286,7 @@ class TicketService extends EventEmitter {
         } catch (error) {
             if (!failureDetails.length) addFailure('reconcile', {}, error);
             this.logger.error('Ticket reconciliation failed.', { legacyIncomplete: this.legacyIncomplete, failures: failureDetails });
-            this.setSync({ ready: false, error: 'Sincronizzazione Discord incompleta. I dati mostrati sono gli ultimi disponibili.' });
+            this.setSync({ ready: false, error: 'Discord synchronization is incomplete. The dashboard shows the latest available data.' });
         } finally {
             this.reconciling = false;
         }
@@ -288,8 +309,8 @@ class TicketService extends EventEmitter {
             const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
             const channel = await this.client.channels.fetch(this.settings.summaryChannelId);
             if (!channel || channel.guildId !== this.settings.guildId || !channel.isTextBased()) throw new Error('Invalid summary channel.');
-            const content = `Ticket aperti: **${this.store.counts().open}**${this.sync.ready ? '' : '\nConteggio non aggiornato: sincronizzazione in corso o interrotta.'}`;
-            const payload = { content, allowedMentions: { parse: [] }, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Apri pannello ticket').setURL(this.settings.publicBaseUrl))] };
+            const content = `Open tickets: **${this.store.counts().open}**${this.sync.ready ? '' : '\nCount may be outdated: synchronization is in progress or interrupted.'}`;
+            const payload = { content, allowedMentions: { parse: [] }, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Open ticket dashboard').setURL(this.settings.publicBaseUrl))] };
             let message;
             const messageId = this.store.read('meta:summary-id');
             if (messageId) {
@@ -301,7 +322,7 @@ class TicketService extends EventEmitter {
                 // Recover an acknowledged send whose message ID was not persisted before a crash.
                 while (!message) {
                     const page = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
-                    message = page.find(candidate => candidate.author.id === this.client.user.id && candidate.content.startsWith('Ticket aperti: **') && candidate.components[0]?.components[0]?.url === this.settings.publicBaseUrl);
+                    message = page.find(candidate => candidate.author.id === this.client.user.id && ['Open tickets: **', 'Ticket aperti: **'].some(prefix => candidate.content.startsWith(prefix)) && candidate.components[0]?.components[0]?.url === this.settings.publicBaseUrl);
                     if (message || page.size < 100) break;
                     before = page.last().id;
                 }

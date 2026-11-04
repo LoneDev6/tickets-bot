@@ -42,6 +42,45 @@ test('message metadata works without privileged content; bot messages are distin
     service.stop();
 });
 
+test('staff escalation notifies only the owner once; close and lock is one Discord operation', async t => {
+    const edits = []; const notices = []; const members = [];
+    const current = { ...thread(), members: { add: async id => members.push(id) }, send: async payload => notices.push(payload),
+        edit: async update => { edits.push(update); Object.assign(current, update); return current; } };
+    const { service, store } = setup({ channels: { fetch: async () => current } });
+    t.after(() => service.stop());
+    store.upsert({ ...thread(), threadId: ids.ticket });
+    const guild = { id: ids.guild, members: { fetch: async ({ user }) => ({ id: user, roles: { cache: new Collection(user === ids.role ? [[ids.role, {}]] : []) } }) } };
+    const staff = { id: ids.role, guild };
+    assert.equal(await service.staff({ id: settings.ownerId, guild }), false);
+    await assert.rejects(service.action(ids.ticket, 'escalate', { id: '120000000000000099', guild }), /not authorized/);
+    await service.action(ids.ticket, 'escalate', staff, 'Needs owner review');
+    await service.action(ids.ticket, 'escalate', staff);
+    assert.equal(notices.length, 1); assert.deepEqual(members, [ids.user]);
+    assert.deepEqual(notices[0].allowedMentions, { parse: [], users: [ids.user] });
+    assert.equal(store.get(ids.ticket).escalatedBy, staff.id);
+    assert.equal(store.statistics.query().totals.escalated, 1);
+    await service.action(ids.ticket, 'close-lock', staff, 'Resolved');
+    assert.deepEqual(edits, [{ archived: true, locked: true }]);
+    assert.equal(store.get(ids.ticket).status, 'locked');
+    assert.equal(store.get(ids.ticket).escalatedAt, null);
+    await assert.rejects(service.action(ids.ticket, 'escalate', staff), /Reopen/);
+    await service.action(ids.ticket, 'reopen', staff);
+    await service.action(ids.ticket, 'escalate', staff);
+    await service.action(ids.ticket, 'resolve-escalation', staff);
+    assert.equal(store.get(ids.ticket).escalatedAt, null);
+    assert.equal(store.statistics.query().totals.closed, 1);
+    assert.equal(store.statistics.query().totals.locked, 1);
+    assert.equal(store.statistics.query().totals.reopened, 1);
+    await assert.rejects(service.action(ids.ticket, 'close', staff, 'x'.repeat(501)), /Invalid action reason/);
+    let release;
+    const authorization = new Promise(resolve => { release = resolve; });
+    guild.members.fetch = () => authorization;
+    const closing = service.action(ids.ticket, 'close', staff);
+    try { await assert.rejects(service.action(ids.ticket, 'reopen', staff), error => error.status === 409); }
+    finally { release({ id: staff.id, roles: { cache: new Collection([[ids.role, {}]]) } }); }
+    await closing;
+});
+
 test('403 errors keep existing tickets and do not prevent later records from reconciling', async () => {
     let later = false;
     const t = thread();
@@ -89,7 +128,7 @@ test('reconcile logs bounded safe failures and a later clean pass clears the syn
 test('summary updates recover an existing message and never duplicate it', async () => {
     let sends = 0; let edits = 0;
     const url = 'https://tickets.example.com';
-    const message = { id: '120000000000000030', author: { id: ids.bot }, content: 'Ticket aperti: **0**', components: [{ components: [{ url }] }], edit: async payload => { edits++; message.content = payload.content; } };
+    const message = { id: '120000000000000030', author: { id: ids.bot }, content: 'Open tickets: **0**', components: [{ components: [{ url }] }], edit: async payload => { edits++; message.content = payload.content; } };
     const channel = { guildId: ids.guild, isTextBased: () => true, messages: { fetch: async value => typeof value === 'string' ? message : new Collection([[message.id, message]]) }, send: async () => { sends++; return message; } };
     const client = { user: { id: ids.bot }, channels: { fetch: async () => channel } };
     const { service, store } = setup(client);
@@ -167,7 +206,7 @@ test('simulated Discord lifecycle imports old tickets, creates and manages a tic
     await service.reconcile();
     assert.equal(service.sync.ready, true);
     await service.updateSummary();
-    assert.equal(summaries.get(summaryId).content, 'Ticket aperti: **0**');
+    assert.equal(summaries.get(summaryId).content, 'Open tickets: **0**');
 
     const guild = { id: ids.guild, channels: { cache: new Collection() }, members: { fetch: async ({ user }) => ({ id: user, roles: { cache: new Collection(user === staffId ? [[ids.role, {}]] : []) } }) } };
     const member = id => ({ id, guild, roles: { cache: new Collection() } });
@@ -180,13 +219,13 @@ test('simulated Discord lifecycle imports old tickets, creates and manages a tic
     assert.deepEqual(store.get(newId).joinedUserIds, [staffId]);
     await assert.rejects(service.action(newId, 'lock', member(ids.user)), /not authorized/);
     await service.updateSummary();
-    assert.equal(summaries.get(summaryId).content, 'Ticket aperti: **1**');
+    assert.equal(summaries.get(summaryId).content, 'Open tickets: **1**');
 
     for (const [action, expected] of [['close', 'closed'], ['reopen', 'open'], ['lock', 'locked'], ['reopen', 'open']]) {
         await service.action(newId, action, member(staffId), 'Synthetic staff action');
         assert.equal(store.get(newId).status, expected);
         await service.updateSummary();
-        assert.equal(summaries.get(summaryId).content, `Ticket aperti: **${expected === 'open' ? 1 : 0}**`);
+        assert.equal(summaries.get(summaryId).content, `Open tickets: **${expected === 'open' ? 1 : 0}**`);
     }
     assert.equal(calls.summarySends, 1);
     assert.equal(calls.summaryEdits, 5);
@@ -213,5 +252,5 @@ test('simulated Discord lifecycle imports old tickets, creates and manages a tic
     assert.equal(store.counts().open, 0);
     await service.updateSummary();
     assert.equal(calls.summarySends, 1);
-    assert.equal(summaries.get(summaryId).content, 'Ticket aperti: **0**');
+    assert.equal(summaries.get(summaryId).content, 'Open tickets: **0**');
 });

@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const Enmap = require('enmap');
 const {
-    Client, Events, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder,
+    Client, Events, GatewayIntentBits, Partials, ActionRowBuilder,
     ButtonBuilder, ButtonStyle, TextInputStyle, ModalBuilder, TextInputBuilder,
     SlashCommandBuilder, PermissionFlagsBits,
 } = require('discord.js');
@@ -13,6 +13,7 @@ const { loadSettings } = require('./settings');
 const { createApp } = require('./server');
 const { importLegacy } = require('./legacy');
 const { startTunnel } = require('./tunnel');
+const { creationPanel, refreshCreationPanels } = require('./ticket-panel');
 const logger = require('./utils/logger');
 
 function row(...buttons) { return new ActionRowBuilder().addComponents(buttons); }
@@ -62,18 +63,17 @@ async function main() {
             if (interaction.commandName === 'ticket-panel') {
                 if (!await service.staff(interaction.member)) return interaction.reply({ content: 'Only support staff can create this panel.', ephemeral: true });
                 if (!settings.publicBaseUrl) return interaction.reply({ content: 'Configure PUBLIC_BASE_URL and the public privacy page before creating a ticket panel.', ephemeral: true });
-                return interaction.reply({ embeds: [new EmbedBuilder().setTitle('Private Support Ticket').setColor('#a0401a').setDescription(`Private tickets are only for rare occasions. Invalid requests may be removed.\nFor plugin bugs use GitHub; for general help use the public support channels after verification. Read the tutorials and search Discord and GitHub before opening a ticket.\n\nYour ticket data is available to authorized support staff through our private dashboard. ${settings.messageContentApproved ? 'Conversation content is archived on our server.' : 'Conversation archiving is pending Discord authorization.'}\n[Privacy policy](${settings.publicBaseUrl}/privacy) · Deletion: info@devs.beer`)],
-                    components: [row(button('ticket_panel_create_thread_generic', 'Generic', ButtonStyle.Primary), button('ticket_panel_create_thread_payment', 'Payment Issue'), button('ticket_panel_my_tickets', 'My Tickets')), row(link(`${settings.publicBaseUrl}/privacy`, 'Privacy policy'))] });
+                return interaction.reply(creationPanel(settings));
             }
             if (interaction.commandName === 'ticket-open') {
                 await interaction.deferReply({ ephemeral: true });
                 const thread = await service.join(interaction.options.getString('id', true), interaction.member);
                 return interaction.editReply({ content: 'You joined the ticket.', components: [row(link(thread.url, 'Go to Ticket'))] });
             }
-            if (['close', 'lock'].includes(interaction.commandName)) {
+            if (['close', 'lock', 'escalate'].includes(interaction.commandName)) {
                 await interaction.deferReply({ ephemeral: true });
                 await service.action(interaction.channelId, interaction.commandName, interaction.member, interaction.options.getString('reason') || '');
-                return interaction.editReply({ content: `Ticket ${interaction.commandName === 'lock' ? 'locked' : 'closed'}.` });
+                return interaction.editReply({ content: `Ticket ${interaction.commandName === 'escalate' ? 'escalated to the owner' : interaction.commandName === 'lock' ? 'closed and locked' : 'closed'}.` });
             }
             if (interaction.commandName === 'rename') {
                 const staff = service.scoped(interaction.channel) ? await service.staff(interaction.member) : interaction.memberPermissions.has(PermissionFlagsBits.Administrator);
@@ -107,11 +107,17 @@ async function main() {
                 await service.action(interaction.channelId, 'reopen', interaction.member);
                 return interaction.editReply({ content: 'Ticket reopened.' });
             }
+            if (['ticket_panel_escalate_thread', 'ticket_panel_resolve_escalation_thread'].includes(interaction.customId)) {
+                await interaction.deferReply({ ephemeral: true });
+                const action = interaction.customId === 'ticket_panel_escalate_thread' ? 'escalate' : 'resolve-escalation';
+                await service.action(interaction.channelId, action, interaction.member);
+                return interaction.editReply({ content: action === 'escalate' ? 'Ticket escalated to the owner.' : 'Escalation resolved.' });
+            }
             if (['ticket_panel_close_thread', 'ticket_panel_lock_thread'].includes(interaction.customId)) {
                 const action = interaction.customId === 'ticket_panel_close_thread' ? 'close' : 'lock';
                 const ticket = store.get(interaction.channelId);
                 if (!service.scoped(interaction.channel) || (!await service.staff(interaction.member) && !(action === 'close' && ticket?.openerId === interaction.user.id))) throw new Error('Unauthorized ticket action.');
-                return interaction.showModal(new ModalBuilder().setCustomId(`modal_ticket_panel_${action}_thread`).setTitle(action === 'close' ? 'Close Ticket' : 'Lock Ticket').addComponents(row(new TextInputBuilder().setCustomId('reason').setLabel('Reason').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(500))));
+                return interaction.showModal(new ModalBuilder().setCustomId(`modal_ticket_panel_${action}_thread`).setTitle(action === 'close' ? 'Close Ticket' : 'Close & Lock Ticket').addComponents(row(new TextInputBuilder().setCustomId('reason').setLabel('Reason').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(500))));
             }
             if (interaction.customId === 'ticket_panel_my_tickets') {
                 const tickets = store.all().filter(ticket => ticket.openerId === interaction.user.id && ticket.status === 'open');
@@ -171,8 +177,8 @@ async function main() {
     });
     event(Events.MessageDelete, message => { if (initialized) return service.deletedMessage(message.channelId, message.id); });
     event(Events.MessageBulkDelete, messages => Promise.all([...messages.values()].map(message => initialized && service.deletedMessage(message.channelId, message.id))));
-    event(Events.ShardDisconnect, () => service.setSync({ ready: false, error: 'Connessione Discord interrotta.' }));
-    event(Events.ShardReconnecting, () => service.setSync({ ready: false, error: 'Riconnessione Discord in corso.' }));
+    event(Events.ShardDisconnect, () => service.setSync({ ready: false, error: 'Disconnected from Discord.' }));
+    event(Events.ShardReconnecting, () => service.setSync({ ready: false, error: 'Reconnecting to Discord.' }));
     event(Events.ShardResume, () => initialized && service.reconcile());
     event(Events.Error, error => logger.error('Discord client error.', error));
     client.once(Events.ClientReady, async () => {
@@ -183,9 +189,11 @@ async function main() {
                 new SlashCommandBuilder().setName('privacy').setDescription('Privacy, web-copy exclusion and local data deletion.'),
                 new SlashCommandBuilder().setName('ticket-open').setDescription('Join a private ticket as authorized support.').addStringOption(option => option.setName('id').setDescription('Ticket thread ID').setRequired(true)),
                 new SlashCommandBuilder().setName('rename').setDescription('Rename a ticket or channel.'),
-                ...['close', 'lock'].map(name => new SlashCommandBuilder().setName(name).setDescription(`${name === 'close' ? 'Close' : 'Lock'} the ticket.`).addStringOption(option => option.setName('reason').setDescription('Reason').setMaxLength(500))),
+                ...['close', 'lock', 'escalate'].map(name => new SlashCommandBuilder().setName(name).setDescription(`${name === 'close' ? 'Close the ticket' : name === 'lock' ? 'Close and lock the ticket' : 'Escalate the ticket to the owner'}.`).addStringOption(option => option.setName('reason').setDescription('Reason').setMaxLength(500))),
             ];
             for (const command of commands) await guild.commands.create(command);
+            try { await refreshCreationPanels(client, settings, store); }
+            catch (error) { logger.error('Ticket creation panel refresh failed; retry on restart.', { code: error.code }); }
             if (!store.read('meta:legacy-complete')) {
                 const report = await importLegacy({ client, legacy, store, settings, channels: [config.channels.ticketsNotifications, config.channels.ticketsOpened], apply: true });
                 service.legacyIncomplete = report.errors > 0;
@@ -203,9 +211,9 @@ async function main() {
                     catch (error) { logger.error('Conversation backfill incomplete; retry on next startup.', error); }
                 }
             }
-            logger.info('Private ticket service ready.');
+            logger.info(service.sync.ready ? 'Private ticket service ready.' : 'Private ticket service running with incomplete synchronization.');
         } catch (error) {
-            service.setSync({ ready: false, error: 'Avvio o importazione incompleti. Controllare configurazione e permessi.' });
+            service.setSync({ ready: false, error: 'Startup or import is incomplete. Check configuration and permissions.' });
             logger.error('Ticket initialization failed.', error);
         }
     });

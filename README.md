@@ -63,7 +63,7 @@ Su Linux x64/arm64, se `CLOUDFLARED_PATH` è vuoto, il bootstrap scarica automat
 
 HumbleServers deve permettere esecuzione del binario e uscita verso Cloudflare sulla porta **7844**. `TUNNEL_PROTOCOL=http2` usa TCP se UDP/QUIC non funziona; non elimina il requisito 7844. Se l'hosting vieta questi requisiti, serve un proxy del provider o un connector esterno. Non è stato testato sull'account reale.
 
-Non usare Quick Tunnel in produzione: URL instabile e mancanza di supporto SSE. Non aggiungere Cloudflare Access davanti a `/privacy`: la pagina deve restare pubblica. Il login Discord protegge pannello/API. Il server accetta solo hostname HTTPS configurato e si fida degli header proxy soltanto da loopback. Verificare l'eventuale health check Pterodactyl prima di cambiare `WEB_HOST`; nessun accesso ai ticket tramite l'endpoint HTTP del provider è consentito.
+Non usare Quick Tunnel in produzione: URL instabile e mancanza di supporto SSE. Non aggiungere Cloudflare Access davanti a `/privacy` o `/api/privacy`: sono pubblici. `/api/stats` è server-to-server e richiede solo il suo `STATS_API_TOKEN` Bearer; non usa una sessione Discord o il ruolo staff. Gli altri endpoint privati per ticket, il pannello, SSE e azioni web richiedono il ruolo configurato in `SUPPORT_TEAM_ROLE_ID`; se la variabile è vuota, si usa `config.roles.support_team`. Il valore HumbleServers di produzione è `784529945049038899`. `OWNER_ID` identifica solo il destinatario delle escalation e non concede alcun bypass. Il server accetta solo hostname HTTPS configurato e si fida degli header proxy soltanto da loopback. Verificare l'eventuale health check Pterodactyl prima di cambiare `WEB_HOST`; nessun accesso ai ticket tramite l'endpoint HTTP del provider è consentito.
 
 Dettagli e criteri di collaudo: [.tasks/private-tickets-web/DEPLOYMENT.md](.tasks/private-tickets-web/DEPLOYMENT.md). Token e domini non vengono creati automaticamente.
 
@@ -79,7 +79,30 @@ Conservazione: ticket aperto più massimo 30 giorni dalla chiusura/blocco/archiv
 
 `MESSAGE_CONTENT_APPROVED=false` è il valore iniziale. Il bot riceve solo metadati dei messaggi e non salva la conversazione completa. Dopo concessione e verifica dei requisiti, `true` abilita lettura/archivio, import della cronologia dei soli ticket, modifiche e cancellazioni. Gli allegati sono riferimenti, non copie binarie permanenti; i loro URL possono scadere.
 
-Risposte, chiusura, blocco e rinomina **dalla app restano disabilitati anche se si abilita Message Content**. I relativi endpoint rifiutano richieste e non accodano operazioni. La gestione continua da Discord. Il pannello include il contesto e i controlli disabilitati per la fase successiva.
+`WEB_CHAT_ENABLED=false` è indipendente: la raccolta delle conversazioni richiede `MESSAGE_CONTENT_APPROVED=true`, mentre la loro visibilità web richiede entrambi i flag a `true`. Le azioni staff abilitate dal pannello sono chiudere, chiudere e bloccare, riaprire, escalare e risolvere un’escalation; il pannello non invia risposte. L’escalation aggiunge al ticket privato il proprietario configurato in `OWNER_ID` e avvisa solo lui.
+
+### Aggregate statistics API
+
+Statistics are encrypted daily UTC counters only: opened, discovered, closed, locked, reopened, deleted, and escalated. They contain numeric counts without user IDs, ticket IDs, or content, and are retained for 730 days. Collection starts on the first installation of this version. Legacy tickets first observed by this version count as discovered; the bot does not reconstruct older events. Small counts can sometimes allow inferences, so these aggregates are not described as fully anonymous. `GET /api/stats` exposes aggregate statistics only, never tickets, and uses its bearer token as the sole authentication method, without a Discord session or staff role.
+
+Set an optional separate `STATS_API_TOKEN` secret (32–256 characters, no whitespace) to enable `GET /api/stats`. Generate a user-chosen secret locally with Node.js:
+
+```sh
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
+```
+
+Send it only in the `Authorization: Bearer <token>` header. Never put the token in a URL or browser code. The API does not use cookie authentication. An unset token returns 404; an invalid token returns 401; invalid query parameters return 400.
+
+Optional `from` and `to` parameters use inclusive `YYYY-MM-DD` UTC dates, with a maximum range of 730 days. `interval` accepts `day`, `week`, or `month`; weeks start Monday and months use calendar months. Empty buckets are included. The response contains current counters and `collectedSince` metadata, which marks when this version first began collecting; it does not imply historical completeness before that date.
+
+```sh
+curl --header "Authorization: Bearer $STATS_API_TOKEN" \
+  "https://tickets.devs.beer/api/stats?interval=week&from=2026-11-01&to=2026-11-04"
+```
+
+The response includes `periods`, `totals`, `current`, and `sync`. `closed` counts transitions from open to closed or locked; `locked` also records locking an already closed ticket. `discovered` counts older tickets first seen by the collector. Imported history is not reconstructed: zero buckets before `collectedSince` do not prove that no tickets existed. `current` covers retained tickets only; check `sync.ready` before treating the snapshot as complete. This API is intended for your dashboard's backend; keep its token out of browser bundles.
+
+Ticket lists load continuously with cursor/revision snapshots, plus a keyboard-accessible Load more button. The separate owner filter accepts a requester name, Discord ID, or mention. Escalated tickets are marked and can be ordered first. Both UI and public privacy policy are in English. Existing creation panels posted by this bot are updated once per policy version to include the public policy link. Protected API requests recheck the required Discord role; SSE sessions recheck every 15 seconds and never contain conversation payloads.
 
 Non inviare il form con prove inesistenti: risposte e requisiti in [.tasks/private-tickets-web/DISCORD-INTENTS.md](.tasks/private-tickets-web/DISCORD-INTENTS.md). Servono dominio pubblico, pratica privacy operativa, demo con dati sintetici e verifica di hosting/backup. Nessun addestramento o invio a servizi AI è previsto.
 

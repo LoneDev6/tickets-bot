@@ -29,11 +29,20 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, staticD
             'Cache-Control': 'no-store',
         });
         if (secure) res.set('Strict-Transport-Security', 'max-age=31536000');
-        if (settings.publicBaseUrl && secure && (!req.secure || req.hostname !== new URL(settings.publicBaseUrl).hostname)) return res.status(421).json({ error: 'Usa l’indirizzo HTTPS pubblico del pannello.' });
+        if (settings.publicBaseUrl && secure && (!req.secure || req.hostname !== new URL(settings.publicBaseUrl).hostname)) return res.status(421).json({ error: 'Use the public HTTPS address of the dashboard.' });
         next();
     });
     app.get('/health', (_req, res) => res.json({ ready: service.sync.ready }));
     app.get('/api/privacy', (_req, res) => res.json(privacyPolicy(settings)));
+    app.get('/api/stats', (req, res) => {
+        if (!settings.statsApiToken) return res.status(404).json({ error: 'The statistics API is disabled.' });
+        const token = req.get('Authorization')?.match(/^Bearer ([^\s]{32,256})$/i)?.[1];
+        if (!token || !sameToken(token, settings.statsApiToken)) return res.set('WWW-Authenticate', 'Bearer').status(401).json({ error: 'A valid statistics Bearer token is required.' });
+        if (Object.keys(req.query).some(key => !['from', 'to', 'interval'].includes(key))) return res.status(400).json({ error: 'Invalid statistics parameters.' });
+        service.store.expire();
+        const result = service.store.statistics.query(req.query);
+        res.json({ ...result, current: { ...service.store.counts(), escalated: service.store.all().filter(ticket => ticket.status === 'open' && ticket.escalatedAt).length }, sync: service.sync });
+    });
     app.use(session({
         name: cookieName, secret: settings.sessionSecret || randomBytes(48).toString('hex'), store,
         resave: false, saveUninitialized: false, rolling: true,
@@ -53,43 +62,43 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, staticD
     }
     async function authorized(data, force = false) {
         if (!data?.user || !data.accessToken || data.expiresAt <= Date.now()) {
-            const error = new Error('Sessione scaduta.'); error.status = 401; throw error;
+            const error = new Error('Your session has expired.'); error.status = 401; throw error;
         }
         if (force || !data.checkedAt || Date.now() - data.checkedAt >= 15_000) {
             const member = await discord(`/users/@me/guilds/${settings.guildId}/member`, data.accessToken);
-            if (member.user?.id !== data.user.id || (data.user.id !== settings.ownerId && !member.roles?.includes(settings.supportRoleId))) {
+            if (member.user?.id !== data.user.id || !member.roles?.includes(settings.supportRoleId)) {
                 const error = new Error('Staff authorization required.'); error.status = 403; throw error;
             }
             data.checkedAt = Date.now();
         }
     }
     const requireStaff = asyncRoute(async (req, res, next) => {
-        try { await authorized(req.session); next(); }
+        try { await authorized(req.session, true); next(); }
         catch (error) {
             if ([401, 403].includes(error.status)) req.session.destroy(() => {});
-            res.status(error.status || 503).json({ error: error.status === 403 ? 'Accesso consentito solo allo staff autorizzato.' : error.status === 401 ? 'Sessione scaduta. Accedi con Discord.' : 'Impossibile verificare i permessi Discord. Riprova.' });
+            res.status(error.status || 503).json({ error: error.status === 403 ? 'Only authorized support staff can access this dashboard.' : error.status === 401 ? 'Your session has expired. Sign in with Discord.' : 'Could not verify Discord permissions. Please retry.' });
         }
     });
     function csrf(req, res, next) {
-        if (!sameToken(req.get('X-CSRF-Token'), req.session.csrfToken) || req.get('origin') !== settings.publicBaseUrl) return res.status(403).json({ error: 'Richiesta non autorizzata. Ricarica il pannello.' });
+        if (!sameToken(req.get('X-CSRF-Token'), req.session.csrfToken) || req.get('origin') !== settings.publicBaseUrl) return res.status(403).json({ error: 'Invalid request. Reload the dashboard and retry.' });
         next();
     }
 
     app.get('/auth/discord', (req, res) => {
-        if (!settings.publicBaseUrl) return res.status(503).json({ error: 'Configurare il dominio HTTPS e OAuth Discord.' });
+        if (!settings.publicBaseUrl) return res.status(503).json({ error: 'Configure the HTTPS domain and Discord OAuth.' });
         const time = Date.now();
         for (const [ip, value] of attempts) if (value.until <= time) attempts.delete(ip);
         const attempt = attempts.get(req.ip) || { count: 0, until: time + 60_000 };
-        if (attempt.count >= 10 || (!attempts.has(req.ip) && attempts.size >= 1000)) return res.status(429).json({ error: 'Troppi tentativi. Riprova tra un minuto.' });
+        if (attempt.count >= 10 || (!attempts.has(req.ip) && attempts.size >= 1000)) return res.status(429).json({ error: 'Too many attempts. Please retry in a minute.' });
         attempt.count += 1; attempts.set(req.ip, attempt);
         req.session.oauthState = randomBytes(32).toString('hex');
         req.session.oauthStartedAt = time;
         const query = new URLSearchParams({ client_id: settings.clientId, response_type: 'code', redirect_uri: `${settings.publicBaseUrl}/auth/discord/callback`, scope: 'identify guilds.members.read', state: req.session.oauthState });
-        req.session.save(error => error ? res.status(503).json({ error: 'Impossibile iniziare il login.' }) : res.redirect(`https://discord.com/oauth2/authorize?${query}`));
+        req.session.save(error => error ? res.status(503).json({ error: 'Could not start sign-in.' }) : res.redirect(`https://discord.com/oauth2/authorize?${query}`));
     });
     app.get('/auth/discord/callback', asyncRoute(async (req, res) => {
         if (!settings.publicBaseUrl || !sameToken(req.query.state, req.session.oauthState) || !Number.isFinite(req.session.oauthStartedAt)
-            || Date.now() - req.session.oauthStartedAt > 5 * 60_000 || typeof req.query.code !== 'string' || req.query.code.length > 2048) return res.status(400).json({ error: 'Login non valido o scaduto. Riprova.' });
+            || Date.now() - req.session.oauthStartedAt > 5 * 60_000 || typeof req.query.code !== 'string' || req.query.code.length > 2048) return res.status(400).json({ error: 'Invalid or expired sign-in. Please retry.' });
         delete req.session.oauthState;
         await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve()));
         const token = await discord('/oauth2/token', null, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -107,7 +116,7 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, staticD
     app.post('/auth/logout', requireStaff, csrf, (req, res) => {
         const sessionId = req.sessionID;
         req.session.destroy(error => {
-            if (error) return res.status(503).json({ error: 'Logout non riuscito. Riprova.' });
+            if (error) return res.status(503).json({ error: 'Sign-out failed. Please retry.' });
             for (const stream of [...streams]) if (stream.sessionId === sessionId) stream.close();
             res.clearCookie(cookieName, { secure, httpOnly: true, sameSite: 'lax', path: '/' }).status(204).end();
         });
@@ -115,29 +124,41 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, staticD
     app.get('/api/session', requireStaff, (req, res) => res.json({ user: req.session.user, csrfToken: req.session.csrfToken, capabilities: service.capabilities(), sync: service.sync }));
     app.use('/api', requireStaff, (_req, _res, next) => { service.store.expire(); next(); });
     app.get('/api/tickets', (req, res) => {
-        const { status = 'open', type = 'all', q = '', sort = 'updated', page = '1', pageSize = '25' } = req.query;
-        if (![...STATUSES, 'all'].includes(status) || !['all', 'Generic', 'Payment'].includes(type) || !['updated', 'created'].includes(sort)
+        const { status = 'open', type = 'all', q = '', opener = '', sort = 'updated', page = '1', pageSize = '25', cursor, revision } = req.query;
+        if (![...STATUSES, 'all'].includes(status) || !['all', 'Generic', 'Payment'].includes(type) || !['updated', 'created', 'priority'].includes(sort)
+            || typeof opener !== 'string' || opener.length > 100 || (cursor !== undefined && (typeof cursor !== 'string' || !ID.test(cursor)))
+            || (revision !== undefined && (typeof revision !== 'string' || !/^\d{1,16}$/.test(revision))) || (cursor && revision === undefined)
             || typeof q !== 'string' || q.length > 200 || typeof page !== 'string' || typeof pageSize !== 'string'
-            || !/^\d{1,6}$/.test(page) || !/^\d{1,3}$/.test(pageSize) || Number(page) < 1 || Number(pageSize) < 1 || Number(pageSize) > 100) return res.status(400).json({ error: 'Filtri non validi.' });
-        const result = service.store.list({ status, type, q, sort, page: Number(page), pageSize: Number(pageSize) });
+            || !/^\d{1,6}$/.test(page) || !/^\d{1,3}$/.test(pageSize) || Number(page) < 1 || Number(pageSize) < 1 || Number(pageSize) > 100) return res.status(400).json({ error: 'Invalid filters.' });
+        if (cursor && Number(revision) !== service.store.revision) return res.status(409).json({ error: 'The ticket list changed. Reload the results.' });
+        const result = service.store.list({ status, type, q, opener, sort, page: Number(page), pageSize: Number(pageSize), cursor });
         res.json({ ...result, tickets: result.tickets.map(publicTicket), sync: service.sync });
     });
     app.param('ticketId', (req, res, next, value) => {
-        if (!ID.test(value)) return res.status(400).json({ error: 'ID ticket non valido.' });
+        if (!ID.test(value)) return res.status(400).json({ error: 'Invalid ticket ID.' });
         const ticket = service.store.get(value);
-        if (!ticket || ticket.guildId !== settings.guildId || !(settings.ticketParentIds || [settings.ticketParentId]).includes(ticket.parentId)) return res.status(404).json({ error: 'Ticket non trovato o non più conservato.' });
+        if (!ticket || ticket.guildId !== settings.guildId || !(settings.ticketParentIds || [settings.ticketParentId]).includes(ticket.parentId)) return res.status(404).json({ error: 'Ticket not found or no longer retained.' });
         req.ticket = ticket; next();
     });
     app.get('/api/tickets/:ticketId', (req, res) => res.json({ ticket: publicTicket(req.ticket) }));
     app.get('/api/tickets/:ticketId/messages', (req, res) => {
-        if (!service.capabilities().canReadConversation || req.ticket.contentExcluded) return res.status(409).json({ error: req.ticket.contentExcluded ? 'Copia web esclusa per questo ticket.' : service.capabilities().reason });
-        if (req.query.before !== undefined && !ID.test(req.query.before)) return res.status(400).json({ error: 'Pagina messaggi non valida.' });
+        if (!service.capabilities().canReadConversation || req.ticket.contentExcluded) return res.status(409).json({ error: req.ticket.contentExcluded ? 'Web chat is excluded for this ticket.' : service.capabilities().reason });
+        if (req.query.before !== undefined && !ID.test(req.query.before)) return res.status(400).json({ error: 'Invalid message cursor.' });
         const messages = service.store.messages(req.ticket.threadId, { before: req.query.before, limit: 51 });
         res.json({ messages: messages.slice(0, 50), nextBefore: messages.length > 50 ? messages[49].id : null, available: true, reason: null });
     });
-    app.all('/api/tickets/:ticketId/:action', csrf, (_req, res) => res.status(409).json({ error: 'Risposta e gestione dalla app non abilitate. Usa Discord.' }));
+    app.post('/api/tickets/:ticketId/actions', csrf, asyncRoute(async (req, res) => {
+        await authorized(req.session, true);
+        const { action, reason = '' } = req.body || {};
+        if (!['close', 'close-lock', 'reopen', 'escalate', 'resolve-escalation'].includes(action) || typeof reason !== 'string' || reason.length > 500) return res.status(400).json({ error: 'Invalid ticket action or reason.' });
+        if (req.ticket.status === 'deleted') return res.status(409).json({ error: 'Deleted tickets cannot be modified.' });
+        const guild = await service.client.guilds.fetch(settings.guildId);
+        await service.action(req.ticket.threadId, action, { id: req.session.user.id, guild }, reason.trim());
+        res.json({ ticket: publicTicket(service.store.get(req.ticket.threadId)) });
+    }));
+    app.all('/api/tickets/:ticketId/:action', csrf, (_req, res) => res.status(409).json({ error: 'Replies are currently available in Discord.' }));
     app.get('/api/events', asyncRoute(async (req, res) => {
-        if (streams.size >= 100 || [...streams].filter(item => item.sessionId === req.sessionID).length >= 3) return res.status(429).json({ error: 'Troppe connessioni aperte.' });
+        if (streams.size >= 100 || [...streams].filter(item => item.sessionId === req.sessionID).length >= 3) return res.status(429).json({ error: 'Too many open connections.' });
         res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' }); res.flushHeaders();
         let updateTimer; let closed = false;
         const send = (event, value) => { if (!closed && !res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(value)}\n\n`); };
@@ -157,21 +178,21 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, staticD
                 await authorized(current, true);
                 if (res.writableLength > 64 * 1024) return close();
                 res.write(': heartbeat\n\n');
-            } catch { send('session-expired', { error: 'Sessione scaduta o autorizzazione revocata.' }); close(); }
+            } catch { send('session-expired', { error: 'Session expired or access revoked.' }); close(); }
             finally { checking = false; }
         }, 15_000);
         service.on('tickets', invalidate); service.on('sync', sync); streams.add(entry);
         send('sync', service.sync); send('tickets', { revision: service.store.revision }); res.on('close', close);
     }));
-    app.use('/api', (_req, res) => res.status(404).json({ error: 'Endpoint non trovato.' }));
+    app.use('/api', (_req, res) => res.status(404).json({ error: 'Endpoint not found.' }));
     if (existsSync(path.join(staticDir, 'index.html'))) {
         app.use(express.static(staticDir, { index: false, dotfiles: 'deny' }));
         app.get(['/', '/privacy', '/tickets/:id'], (_req, res) => res.sendFile(path.join(staticDir, 'index.html')));
-    } else app.get(['/', '/privacy'], (_req, res) => res.status(503).type('text').send('Build del pannello mancante. Compilare in locale e distribuire web/dist. Informativa: /api/privacy'));
+    } else app.get(['/', '/privacy'], (_req, res) => res.status(503).type('text').send('Dashboard build missing. Build locally and distribute web/dist. Privacy policy: /api/privacy'));
     app.use((error, _req, res, _next) => {
         if (res.headersSent) return res.end();
-        const status = [400, 401, 403, 413, 503].includes(error.status) ? error.status : 500;
-        res.status(status).json({ error: status === 500 ? 'Errore interno. Riprova.' : status === 403 ? 'Accesso non autorizzato.' : 'Richiesta non riuscita. Riprova il login o ricarica il pannello.' });
+        const status = [400, 401, 403, 404, 409, 413, 429, 503].includes(error.status) ? error.status : 500;
+        res.status(status).json({ error: status === 500 ? 'An internal error occurred. Please retry.' : status === 403 ? 'Access denied.' : status === 409 ? 'The ticket or list changed, or another action is in progress. Refresh and retry.' : status === 400 ? 'Invalid request parameters.' : 'Request failed. Sign in again or reload the dashboard.' });
     });
     app.locals.close = () => { for (const stream of [...streams]) stream.close(); store.stopInterval?.(); };
     return app;

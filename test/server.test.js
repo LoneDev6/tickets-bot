@@ -77,14 +77,21 @@ test('a non-staff identity is rejected at the OAuth callback', async t => {
     assert.equal((await f.request('/api/session')).status, 401);
 });
 
-test('role revocation invalidates an existing session after its bounded authorization cache', async t => {
+test('the configured owner has no dashboard access without the support role', async t => {
+    const f = await fixture(t);
+    f.settings.ownerId = ids.user;
+    f.revoke();
+    assert.equal((await f.login()).status, 403);
+    assert.equal((await f.request('/api/session')).status, 401);
+    assert.equal((await f.request('/api/tickets')).status, 401);
+    assert.equal((await f.request('/api/events')).status, 401);
+    assert.equal((await f.request('/api/privacy')).status, 200);
+});
+
+test('role revocation invalidates an existing session on its next protected request', async t => {
     const f = await fixture(t); await f.login(); f.revoke();
-    const realNow = Date.now;
-    try {
-        Date.now = () => realNow() + 16_000;
-        assert.equal((await f.request('/api/tickets')).status, 403);
-        assert.equal((await f.request('/api/session')).status, 401);
-    } finally { Date.now = realNow; }
+    assert.equal((await f.request('/api/tickets')).status, 403);
+    assert.equal((await f.request('/api/session')).status, 401);
 });
 
 test('SSE sends a snapshot revision and is cleaned up when the client disconnects', async t => {
@@ -109,4 +116,78 @@ test('configuration rejects unsafe origins and cryptographic comparison handles 
     assert.throws(() => loadSettings({ PUBLIC_BASE_URL: 'https://user:pass@example.com' }, config));
     assert.equal(sameToken('é', 'a'), false); assert.equal(sameToken('abc', 'abc'), true);
     assert.equal(loadSettings({}, config).port, 7777);
+    assert.equal(loadSettings({ SUPPORT_TEAM_ROLE_ID: '784529945049038899' }, config).supportRoleId, '784529945049038899');
+    assert.throws(() => loadSettings({ SUPPORT_TEAM_ROLE_ID: 'not-a-role' }, config));
+    assert.equal(loadSettings({}, config).webChatEnabled, false);
+    assert.throws(() => loadSettings({ WEB_CHAT_ENABLED: 'yes' }, config));
+    assert.throws(() => loadSettings({ STATS_API_TOKEN: 'short' }, config));
+});
+
+test('statistics use a separate header-only Bearer token and never expose ticket data', async t => {
+    const f = await fixture(t);
+    assert.equal((await f.request('/api/stats')).status, 404);
+    f.settings.statsApiToken = 'test-only-statistics-token-with-48-characters-long';
+    assert.equal((await f.request('/api/stats')).status, 401);
+    assert.equal((await f.request(`/api/stats?token=${f.settings.statsApiToken}`)).status, 401);
+    assert.equal((await f.request('/api/stats', { headers: { Authorization: 'Bearer incorrect-but-long-enough-test-token' } })).status, 401);
+    const headers = { Authorization: `Bearer ${f.settings.statsApiToken}` };
+    const response = await f.request('/api/stats?interval=week', { headers });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.timezone, 'UTC'); assert.equal(result.interval, 'week');
+    assert.equal(result.current.open, 1);
+    assert(!JSON.stringify(result).includes(ids.ticket));
+    assert(!JSON.stringify(result).includes(ids.user));
+    assert(!JSON.stringify(result).includes('private'));
+    assert.equal((await f.request('/api/tickets', { headers })).status, 401);
+    assert.equal((await f.request('/api/stats?interval[]=day', { headers })).status, 400);
+    assert.equal((await f.request('/api/stats?from=2026-02-30', { headers })).status, 400);
+    await f.login();
+    assert.equal((await f.request('/api/stats')).status, 401);
+});
+
+test('ticket cursor snapshots reject changed datasets and support owner filtering', async t => {
+    const f = await fixture(t); await f.login();
+    for (let i = 1; i <= 30; i++) f.store.upsert({ threadId: String(BigInt(ids.ticket) + 100n + BigInt(i)), guildId: ids.guild, parentId: ids.parent, openerId: ids.user, openerName: 'Synthetic owner' });
+    const first = await (await f.request(`/api/tickets?opener=${ids.user}`)).json();
+    assert.equal(first.tickets.length, 25); assert(first.nextCursor);
+    const nextPath = `/api/tickets?opener=${ids.user}&cursor=${first.nextCursor}&revision=${first.revision}`;
+    const next = await (await f.request(nextPath)).json();
+    assert.equal(next.tickets.length, 6); assert.equal(next.nextCursor, null);
+    assert.equal(new Set([...first.tickets, ...next.tickets].map(ticket => ticket.threadId)).size, 31);
+    f.store.upsert({ threadId: ids.ticket, name: 'Live update' });
+    assert.equal((await f.request(nextPath)).status, 409);
+    assert.equal((await f.request('/api/tickets?opener[]=bad')).status, 400);
+});
+
+test('web chat requires both feature flags and respects ticket exclusions', async t => {
+    const f = await fixture(t); await f.login();
+    assert.equal(f.service.capabilities().canReadConversation, false);
+    f.settings.webChatEnabled = true;
+    assert.equal((await f.request(`/api/tickets/${ids.ticket}/messages`)).status, 409);
+    f.settings.messageContentApproved = true;
+    assert.equal((await f.request(`/api/tickets/${ids.ticket}/messages`)).status, 200);
+    f.store.excludeUser(ids.user);
+    assert.equal((await f.request(`/api/tickets/${ids.ticket}/messages`)).status, 409);
+});
+
+test('staff web actions enforce CSRF, fresh roles, scope and the fixed action allowlist', async t => {
+    const f = await fixture(t); await f.login();
+    const calls = [];
+    const guild = { id: ids.guild };
+    f.service.client.guilds = { fetch: async id => { assert.equal(id, ids.guild); return guild; } };
+    f.service.action = async (...args) => { calls.push(args); f.store.upsert({ threadId: ids.ticket, archived: true }); };
+    const session = await (await f.request('/api/session')).json();
+    assert.equal(session.capabilities.canManageTicket, true);
+    const route = `/api/tickets/${ids.ticket}/actions`;
+    const headers = { 'Content-Type': 'application/json', Origin: f.settings.publicBaseUrl, 'X-CSRF-Token': session.csrfToken };
+    const body = JSON.stringify({ action: 'close-lock', reason: 'Resolved' });
+    assert.equal((await f.request(route, { method: 'POST', body, headers: { 'Content-Type': 'application/json' } })).status, 403);
+    assert.equal((await f.request(route, { method: 'POST', body: JSON.stringify({ action: 'purge' }), headers })).status, 400);
+    assert.equal((await f.request(route, { method: 'POST', body, headers })).status, 200);
+    assert.equal(calls.length, 1); assert.equal(calls[0][1], 'close-lock'); assert.equal(calls[0][2].id, ids.user);
+    assert.equal((await f.request('/api/tickets/120000000000000099/actions', { method: 'POST', body, headers })).status, 404);
+    f.revoke();
+    assert.equal((await f.request(route, { method: 'POST', body, headers })).status, 403);
+    assert.equal(calls.length, 1);
 });
