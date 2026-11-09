@@ -76,6 +76,9 @@ test('staff escalation notifies only the owner once; close and lock is one Disco
     assert.equal(store.get(ids.ticket).escalatedBy, staff.id);
     assert.equal(store.statistics.query().totals.escalated, 1);
     await service.action(ids.ticket, 'close-lock', staff, 'Resolved');
+    assert.equal(notices.length, 2);
+    assert.equal(notices[1].embeds[0].data.title, 'Ticket Locked');
+    assert.match(notices[1].embeds[0].data.description, /Reason: Resolved/);
     assert.deepEqual(edits, [{ archived: true, locked: true }]);
     assert.equal(store.get(ids.ticket).status, 'locked');
     assert.equal(store.get(ids.ticket).escalatedAt, null);
@@ -95,6 +98,54 @@ test('staff escalation notifies only the owner once; close and lock is one Disco
     try { await assert.rejects(service.action(ids.ticket, 'reopen', staff), error => error.status === 409); }
     finally { release({ id: staff.id, roles: { cache: new Collection([[ids.role, {}]]) } }); }
     await closing;
+});
+
+test('closure notices precede archiving, preserve the reason and never ping mentioned users', async t => {
+    const calls = [];
+    const current = { ...thread(),
+        send: async payload => { calls.push(['send', payload]); },
+        edit: async change => { calls.push(['edit', change]); Object.assign(current, change); return current; },
+    };
+    const { service, store } = setup({ channels: { fetch: async () => current } });
+    t.after(() => service.stop());
+    const guild = { id: ids.guild, members: { fetch: async () => ({ id: ids.user, roles: { cache: new Collection([[ids.role, {}]]) } }) } };
+    const staff = { id: ids.user, guild };
+    const reason = '  Duplicate @everyone <@120000000000000099>  ';
+    for (const action of ['close', 'lock', 'close-lock']) {
+        Object.assign(current, { archived: false, locked: false });
+        store.upsert({ ...current, threadId: ids.ticket });
+        calls.length = 0;
+        await service.action(ids.ticket, action, staff, reason);
+        assert.deepEqual(calls.map(([name]) => name), ['send', 'edit']);
+        const notice = calls[0][1];
+        const locked = action !== 'close';
+        assert.equal(notice.embeds[0].data.title, locked ? 'Ticket Locked' : 'Ticket Closed');
+        assert.equal(notice.embeds[0].data.description, `This thread has been ${locked ? 'locked' : 'closed'} by <@${staff.id}>.\nReason: ${reason.trim()}`);
+        assert.deepEqual(notice.allowedMentions, { parse: [] });
+        assert.equal(notice.components[0].toJSON().components[0].custom_id, 'ticket_panel_reopen_thread');
+        assert.equal(store.get(ids.ticket).status, locked ? 'locked' : 'closed');
+        assert.equal(store.get(ids.ticket).lastAction.reason, reason);
+        calls.length = 0;
+        await service.action(ids.ticket, action, staff, reason);
+        assert.deepEqual(calls.map(([name]) => name), ['edit'], 'already closed tickets must not be reopened to send another notice');
+    }
+    Object.assign(current, { archived: false, locked: false });
+    calls.length = 0;
+    await service.action(ids.ticket, 'close', staff);
+    assert.match(calls[0][1].embeds[0].data.description, /Reason: No reason\.$/);
+
+    Object.assign(current, { archived: false, locked: false });
+    store.upsert({ ...current, threadId: ids.ticket });
+    calls.length = 0;
+    guild.members.fetch = async () => ({ id: ids.user, roles: { cache: new Collection() } });
+    await assert.rejects(service.action(ids.ticket, 'lock', staff, 'Unauthorized'), { status: 403 });
+    assert.deepEqual(calls, []);
+    guild.members.fetch = async () => ({ id: ids.user, roles: { cache: new Collection([[ids.role, {}]]) } });
+    current.send = async () => { throw new Error('Cannot send closure notice'); };
+    await assert.rejects(service.action(ids.ticket, 'close', staff, 'Solved'), /Cannot send closure notice/);
+    assert.deepEqual(calls, []);
+    assert.equal(store.get(ids.ticket).status, 'open');
+    assert.equal(service.busyTickets.size, 0);
 });
 
 test('403 errors keep existing tickets and do not prevent later records from reconciling', async () => {

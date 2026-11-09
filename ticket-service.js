@@ -1,9 +1,25 @@
 const { EventEmitter } = require('node:events');
-const { ChannelType, PermissionFlagsBits, WebhookType } = require('discord.js');
+const { ChannelType, PermissionFlagsBits, WebhookType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { ID } = require('./tickets');
+const { DiscordReader } = require('./discord-reader');
+const { chatDebug } = require('./utils/chat-debug');
 
 function unknownChannel(error) {
     return Number(error.code) === 10003;
+}
+
+function storedEmbed(embed) {
+    const text = value => typeof value === 'string' ? value : undefined;
+    const data = typeof embed.toJSON === 'function' ? embed.toJSON() : embed;
+    return {
+        title: text(data.title), description: text(data.description), url: text(data.url),
+        color: Number.isInteger(data.color) && data.color >= 0 && data.color <= 0xffffff ? data.color : undefined,
+        fields: Array.isArray(data.fields) ? data.fields.filter(field => field && typeof field.name === 'string' && typeof field.value === 'string')
+            .map(field => ({ name: field.name, value: field.value, inline: Boolean(field.inline) })) : [],
+        image: text(data.image?.url || data.image), thumbnail: text(data.thumbnail?.url || data.thumbnail),
+        author: typeof data.author?.name === 'string' ? { name: data.author.name, url: text(data.author.url), iconUrl: text(data.author.icon_url || data.author.iconUrl) } : undefined,
+        footer: typeof data.footer?.text === 'string' ? { text: data.footer.text, iconUrl: text(data.footer.icon_url || data.footer.iconUrl) } : undefined,
+    };
 }
 
 function threadData(thread) {
@@ -16,16 +32,22 @@ function threadData(thread) {
 }
 
 class TicketService extends EventEmitter {
-    constructor(client, store, settings, { logger = console } = {}) {
+    constructor(client, store, settings, { logger = console, reader, debug = chatDebug } = {}) {
         super();
         this.client = client;
         this.store = store;
         this.settings = settings;
         this.logger = logger;
+        this.debug = debug;
+        this.reader = reader || (settings.discordReaderApiKey ? new DiscordReader({ baseUrl: settings.discordReaderBaseUrl, apiKey: settings.discordReaderApiKey }, { debug }) : null);
+        this.conversationReads = new Map();
+        this.readerLoaded = new Set();
         this.sync = { ready: false, updatedAt: null, error: null };
         this.busyUsers = new Set();
         this.busyTickets = new Set();
         this.webhookLookups = new Map();
+        this.mentionLookups = new Map();
+        this.mentionFailures = new Map();
         this.summaryTimer = null;
         this.summaryRunning = false;
         this.summaryPending = false;
@@ -38,11 +60,11 @@ class TicketService extends EventEmitter {
     }
 
     capabilities() {
-        const enabled = this.settings.messageContentApproved;
+        const enabled = Boolean(this.reader || this.settings.messageContentApproved);
         return {
             canReadConversation: Boolean(enabled && this.settings.webChatEnabled), canArchiveConversation: enabled,
             canReply: Boolean(enabled && this.settings.webChatEnabled && this.settings.webRepliesEnabled), canManageTicket: true,
-            reason: !enabled ? 'Web chat is unavailable until Discord Message Content access is approved.' : !this.settings.webChatEnabled ? 'Web chat is disabled. Open this ticket in Discord.' : !this.settings.webRepliesEnabled ? 'Web replies are disabled. Reply in Discord.' : 'Staff replies use a Discord webhook with your server name and avatar.',
+            reason: !enabled ? 'Web chat requires Discord Reader or approved Message Content access.' : !this.settings.webChatEnabled ? 'Web chat is disabled. Open this ticket in Discord.' : !this.settings.webRepliesEnabled ? 'Web replies are disabled. Reply in Discord.' : 'Staff replies use a Discord webhook with your server name and avatar.',
         };
     }
 
@@ -94,7 +116,7 @@ class TicketService extends EventEmitter {
         return lookup;
     }
 
-    async reply(threadId, member, content) {
+    async reply(threadId, member, content, clientNonce) {
         if (typeof content !== 'string' || !content.trim() || content.length > 2000) throw Object.assign(new Error('A reply must contain 1–2000 characters.'), { status: 400 });
         if (!this.capabilities().canReply) throw Object.assign(new Error(this.capabilities().reason), { status: 409 });
         if (this.busyTickets.has(threadId)) throw Object.assign(new Error('Another action is in progress for this ticket.'), { status: 409 });
@@ -115,7 +137,7 @@ class TicketService extends EventEmitter {
             const avatar = staff.displayAvatarURL({ size: 128 });
             const sent = await hook.send({ content: content.trim(), username: name, avatarURL: avatar, threadId, allowedMentions: { parse: [], repliedUser: false } });
             if (sent.channelId !== threadId || sent.webhookId !== hook.id || !ID.test(sent.id)) throw new Error('Unexpected webhook message destination.');
-            const attribution = { staffAuthorId: staff.id, authorName: name, authorAvatarUrl: avatar, webhookId: hook.id };
+            const attribution = { staffAuthorId: staff.id, authorName: name, authorAvatarUrl: avatar, webhookId: hook.id, ...(clientNonce ? { clientNonce } : {}) };
             await this.handleMessage(sent, attribution);
             const saved = this.store.message(threadId, sent.id);
             if (saved) this.store.saveMessage(threadId, { ...saved, ...attribution, authorId: staff.id, bot: true });
@@ -169,6 +191,15 @@ class TicketService extends EventEmitter {
             } else if (action === 'reopen') {
                 updated = await thread.edit({ locked: false, archived: false }, 'Reopened by support');
             } else {
+                if (!thread.archived && !thread.locked) {
+                    const locked = action === 'lock' || action === 'close-lock';
+                    await thread.send({
+                        embeds: [new EmbedBuilder().setTitle(locked ? 'Ticket Locked' : 'Ticket Closed')
+                            .setDescription(`This thread has been ${locked ? 'locked' : 'closed'} by <@${member.id}>.\nReason: ${reason.trim() || 'No reason.'}`)],
+                        components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_panel_reopen_thread').setLabel('Re-open').setStyle(ButtonStyle.Primary))],
+                        allowedMentions: { parse: [] },
+                    });
+                }
                 updated = await thread.edit({ archived: true, ...(['lock', 'close-lock'].includes(action) ? { locked: true } : {}) }, reason || 'No reason.');
             }
             this.recordThread(updated);
@@ -197,7 +228,6 @@ class TicketService extends EventEmitter {
             try {
                 await thread.members.add(userId);
                 await thread.setRateLimitPerUser(5);
-                const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
                 const info = await thread.send({
                     embeds: [new EmbedBuilder().setTitle('Ticket Information').setDescription(`**Type:** ${type}\n**Description:** ${description}`).setColor('#0099FF')],
                     components: [new ActionRowBuilder().addComponents(
@@ -234,11 +264,11 @@ class TicketService extends EventEmitter {
         return thread;
     }
 
-    async handleMessage(message, staffAttribution) {
+    handleMessage(message, staffAttribution, fromReader = false) {
         const ticket = this.store.get(message.channelId);
-        if (!ticket || ticket.status === 'deleted' || message.guildId !== this.settings.guildId || this.store.suppressed(message.channelId)) return;
+        if (this.stopping || !ticket || ticket.status === 'deleted' || (ticket.expiresAt && ticket.expiresAt <= this.store.now()) || message.guildId !== this.settings.guildId || this.store.suppressed(message.channelId) || this.store.messageDeleted(message.channelId, message.id)) return;
         const saved = staffAttribution || this.store.message(ticket.threadId, message.id);
-        const staffReply = saved?.staffAuthorId && saved.webhookId === message.webhookId ? saved : null;
+        const staffReply = saved?.staffAuthorId && (fromReader || saved.webhookId === message.webhookId) ? saved : null;
         const authorId = staffReply?.staffAuthorId || message.author?.id || null;
         if (this.store.excluded(authorId)) {
             this.store.clearMessages(ticket.threadId);
@@ -247,20 +277,235 @@ class TicketService extends EventEmitter {
         }
         const authorName = ticket.contentExcluded && message.webhookId ? null : staffReply?.authorName || message.member?.displayName || message.author?.globalName || message.author?.username || null;
         const nowTicket = this.store.get(ticket.threadId);
+        const createdAt = message.createdTimestamp || saved?.createdAt || Number((BigInt(message.id) >> 22n) + 1420070400000n);
         const update = { threadId: ticket.threadId };
-        if (!nowTicket.lastMessageId || BigInt(message.id) >= BigInt(nowTicket.lastMessageId)) Object.assign(update, { lastMessageId: message.id, lastMessageAuthorId: authorId, lastMessageAuthorName: authorName, lastMessageAt: message.createdTimestamp });
-        if (message.author && (!message.author.bot || staffReply) && !message.system && (!nowTicket.lastHumanMessageId || BigInt(message.id) >= BigInt(nowTicket.lastHumanMessageId))) Object.assign(update, { lastHumanMessageId: message.id, lastHumanMessageAuthorId: authorId, lastHumanMessageAt: message.createdTimestamp });
+        const authorAvatarUrl = staffReply?.authorAvatarUrl || message.member?.displayAvatarURL?.({ size: 128 }) || message.author?.displayAvatarURL?.({ size: 128 }) || saved?.authorAvatarUrl || null;
+        if (authorId === nowTicket.openerId && !message.webhookId && authorAvatarUrl && authorAvatarUrl !== nowTicket.openerAvatarUrl
+            && (!nowTicket.openerAvatarUrl || !nowTicket.lastMessageId || BigInt(message.id) >= BigInt(nowTicket.lastMessageId))) update.openerAvatarUrl = authorAvatarUrl;
+        if (!nowTicket.lastMessageId || BigInt(message.id) >= BigInt(nowTicket.lastMessageId)) Object.assign(update, { lastMessageId: message.id, lastMessageAuthorId: authorId, lastMessageAuthorName: authorName, lastMessageAt: createdAt });
+        if (message.author && (!message.author.bot || staffReply) && !message.system && (!nowTicket.lastHumanMessageId || BigInt(message.id) >= BigInt(nowTicket.lastHumanMessageId))) Object.assign(update, { lastHumanMessageId: message.id, lastHumanMessageAuthorId: authorId, lastHumanMessageAt: createdAt });
         if (Object.keys(update).length > 1) this.store.upsert(update);
-        if (this.settings.messageContentApproved && !message.partial && !message.system) {
+        if ((fromReader || (this.reader ? staffAttribution : this.settings.messageContentApproved)) && !message.partial && !message.system) {
             this.store.saveMessage(ticket.threadId, {
                 id: message.id, authorId, authorName,
-                authorAvatarUrl: staffReply?.authorAvatarUrl || message.member?.displayAvatarURL?.({ size: 128 }) || message.author?.displayAvatarURL?.({ size: 128 }) || null,
+                authorAvatarUrl,
                 bot: Boolean(message.author?.bot), webhookId: message.webhookId || null,
-                ...(staffReply ? { staffAuthorId: staffReply.staffAuthorId } : {}),
-                content: message.content || '', createdAt: message.createdTimestamp, editedAt: message.editedTimestamp,
-                embeds: message.embeds.map(embed => ({ title: embed.title, description: embed.description, fields: embed.fields })),
-                attachments: [...message.attachments.values()].map(attachment => ({ id: attachment.id, name: attachment.name, url: attachment.url })),
+                ...(staffReply ? { staffAuthorId: staffReply.staffAuthorId, ...(staffReply.clientNonce ? { clientNonce: staffReply.clientNonce } : {}) } : {}),
+                content: message.content || '', createdAt, editedAt: message.editedTimestamp,
+                ...(fromReader && saved?.readerDirty ? { readerDirty: saved.readerDirty } : {}),
+                embeds: message.embeds.map(storedEmbed),
+                replyToId: message.reference?.messageId || saved?.replyToId || null,
+                attachments: [...message.attachments.values()].map(attachment => ({ id: attachment.id, name: attachment.name, url: attachment.url,
+                    contentType: attachment.contentType, size: attachment.size })),
             });
+        }
+    }
+
+    updatedMessage(message) {
+        const ticket = this.store.get(message.channelId);
+        if (this.stopping || !ticket || ticket.guildId !== this.settings.guildId || ticket.contentExcluded || ticket.status === 'deleted') return;
+        const saved = this.store.message(message.channelId, message.id);
+        if (saved) this.store.saveMessage(message.channelId, { ...saved, readerDirty: this.store.revision + 1 });
+    }
+
+    readableTicket(threadId) {
+        this.store.expire(threadId);
+        const ticket = this.store.get(threadId);
+        if (this.stopping) throw Object.assign(new Error('Conversation synchronization is stopping.'), { status: 503 });
+        if (!ticket || ticket.guildId !== this.settings.guildId || !(this.settings.ticketParentIds || [this.settings.ticketParentId]).includes(ticket.parentId)) throw Object.assign(new Error('Ticket is no longer retained.'), { status: 404 });
+        if (!this.capabilities().canReadConversation || ticket.contentExcluded) throw Object.assign(new Error('Web chat is unavailable for this ticket.'), { status: 409 });
+        if (this.reader && ticket.status === 'deleted') throw Object.assign(new Error('Ticket was deleted.'), { status: 409 });
+        return ticket;
+    }
+
+    conversationMessages(threadId, options) {
+        const messages = this.store.messages(threadId, options);
+        const state = this.reader && this.store.read(`r:${this.store.index(threadId)}`);
+        return state && !state.complete ? messages.filter(message => BigInt(message.id) >= BigInt(state.before)) : messages;
+    }
+
+    async saveReaderPage(threadId, messages) {
+        return this.debug.time('persist', () => {
+            this.readableTicket(threadId);
+            if (messages.some(message => message.guild_id === this.settings.guildId && message.channel_id === threadId
+                && !this.store.messageDeleted(threadId, message.id)
+                && this.store.excluded(this.store.message(threadId, message.id)?.staffAuthorId || message.author?.id))) {
+                this.store.clearMessages(threadId);
+                this.store.upsert({ threadId, contentExcluded: true, description: null });
+                this.readableTicket(threadId);
+            }
+            this.store.batchWrites(() => {
+                for (const message of messages) {
+                    const saved = this.store.message(threadId, message.id);
+                    const cached = this.client.users?.cache?.get(message.author?.id);
+                    this.handleMessage({
+                        id: message.id, channelId: message.channel_id, guildId: message.guild_id,
+                        author: message.author ? { ...message.author, globalName: message.author.global_name,
+                            displayAvatarURL: () => message.author.avatar_url || saved?.authorAvatarUrl || cached?.displayAvatarURL?.({ size: 128 }) || null } : null,
+                        webhookId: message.webhook_id || saved?.webhookId || null, content: message.content,
+                        createdTimestamp: message.timestamp ? Date.parse(message.timestamp) : null,
+                        editedTimestamp: message.edited_timestamp ? Date.parse(message.edited_timestamp) : null,
+                        system: ![0, 19, 20, 23].includes(message.type ?? 0), partial: false,
+                        embeds: message.embeds,
+                        reference: message.message_reference && (!message.message_reference.channel_id || message.message_reference.channel_id === threadId)
+                            && (!message.message_reference.guild_id || message.message_reference.guild_id === message.guild_id)
+                            && typeof message.message_reference.message_id === 'string' && ID.test(message.message_reference.message_id)
+                            ? { messageId: message.message_reference.message_id } : null,
+                        attachments: new Map(message.attachments.map((file, index) => [index, {
+                            id: typeof file.id === 'string' ? file.id : undefined,
+                            name: typeof file.filename === 'string' ? file.filename : typeof file.name === 'string' ? file.name : 'Attachment',
+                            url: typeof file.url === 'string' ? file.url : null,
+                            contentType: typeof file.content_type === 'string' ? file.content_type : undefined,
+                            size: Number.isSafeInteger(file.size) && file.size >= 0 ? file.size : undefined,
+                        }])),
+                    }, undefined, true);
+                }
+            });
+            this.readableTicket(threadId);
+        }, { count: messages.length, contentBytes: messages.reduce((sum, message) => sum + Buffer.byteLength(message.content || ''), 0) });
+    }
+
+    cachedMentionNames(ticket, users, roles) {
+        const guild = this.client.guilds?.cache?.get(ticket.guildId);
+        const result = { users: {}, roles: {}, roleColors: {} };
+        for (const id of users) {
+            const member = guild?.members?.cache?.get(id);
+            const user = this.client.users?.cache?.get(id);
+            const name = member?.displayName || user?.globalName || user?.username;
+            if (typeof name === 'string') result.users[id] = name.slice(0, 100);
+        }
+        for (const id of roles) {
+            const role = guild?.roles?.cache?.get(id);
+            if (typeof role?.name === 'string') result.roles[id] = role.name.slice(0, 100);
+            if (/^#[0-9a-f]{6}$/i.test(role?.hexColor || '') && role.hexColor !== '#000000') result.roleColors[id] = role.hexColor;
+        }
+        return result;
+    }
+
+    async resolveMentions(threadId, { users = [], roles = [] }) {
+        const ticket = this.readableTicket(threadId);
+        if (users.length + roles.length > 4 || [...users, ...roles].some(id => typeof id !== 'string' || !ID.test(id))) throw Object.assign(new Error('Invalid mention IDs.'), { status: 400 });
+        const result = this.cachedMentionNames(ticket, users, roles);
+        const missing = users.filter(id => !result.users[id]);
+        if (missing.length) {
+            const guild = this.client.guilds?.cache?.get(ticket.guildId) || await this.client.guilds.fetch(ticket.guildId);
+            this.readableTicket(threadId);
+            await Promise.all(missing.map(async id => {
+                let lookup = this.mentionLookups.get(id);
+                if (!lookup && this.mentionLookups.size < 4 && !(this.mentionFailures.get(id) > Date.now())) {
+                    lookup = Promise.resolve().then(() => guild.members.fetch({ user: id })).catch(() => {
+                        if (this.mentionFailures.size >= 1000) this.mentionFailures.delete(this.mentionFailures.keys().next().value);
+                        this.mentionFailures.set(id, Date.now() + 60000);
+                        return null;
+                    }).finally(() => this.mentionLookups.delete(id));
+                    this.mentionLookups.set(id, lookup);
+                }
+                const member = await lookup;
+                const name = member?.displayName || member?.user?.globalName || member?.user?.username;
+                if (typeof name === 'string') result.users[id] = name.slice(0, 100);
+            }));
+        }
+        this.readableTicket(threadId);
+        return result;
+    }
+
+    async conversation(threadId, { before, limit, cached = false } = {}) {
+        this.readableTicket(threadId);
+        const pageSize = limit ?? 50;
+        if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50) throw Object.assign(new Error('Invalid message page size.'), { status: 400 });
+        if (this.reader && !cached) {
+            // Share in-flight work; serialize different pages of the same ticket.
+            const queuedAt = performance.now();
+            while (this.conversationReads.has(threadId)) await this.conversationReads.get(threadId);
+            this.debug.write('ticket_queue', { ms: performance.now() - queuedAt });
+            const reading = this.debug.time('reader_sync', () => this.loadReaderConversation(threadId, before, limit));
+            this.conversationReads.set(threadId, reading);
+            try { await reading; }
+            catch (error) { this.readerLoaded.delete(threadId); throw error; }
+            finally { if (this.conversationReads.get(threadId) === reading) this.conversationReads.delete(threadId); }
+        }
+        this.readableTicket(threadId);
+        const snapshotStarted = performance.now();
+        const state = this.reader && this.store.read(`r:${this.store.index(threadId)}`);
+        const messages = this.conversationMessages(threadId, { before, limit: pageSize + 1 });
+        const avatar = message => message.authorAvatarUrl || this.client.users?.cache?.get(message.authorId)?.displayAvatarURL?.({ size: 128 }) || null;
+        const ticket = this.readableTicket(threadId);
+        const members = this.client.guilds?.cache?.get(ticket.guildId)?.members?.cache;
+        const result = { messages: messages.slice(0, pageSize).map(({ readerDirty, ...message }) => {
+            const referenced = message.replyToId && this.store.message(threadId, message.replyToId);
+            const member = !message.webhookId && members?.get(message.authorId);
+            return { ...message,
+                authorName: member?.displayName || message.authorName,
+                authorRoleColor: member?.displayHexColor && member.displayHexColor !== '#000000' ? member.displayHexColor : message.authorRoleColor,
+                authorAvatarUrl: member?.displayAvatarURL?.({ size: 128 }) || avatar(message),
+                ...(message.replyToId ? { replyTo: referenced ? {
+                    id: referenced.id, authorId: referenced.authorId, authorName: referenced.authorName || 'Unknown user',
+                    authorAvatarUrl: avatar(referenced),
+                    content: typeof referenced.content === 'string' ? referenced.content.slice(0, 300) : '', bot: referenced.bot,
+                } : { id: message.replyToId, authorId: '', authorName: 'Unknown user', content: 'Original message not loaded.' } } : {}),
+            };
+        }), nextBefore: messages.length > pageSize ? messages[pageSize - 1].id : state && !state.complete && messages.length ? messages.at(-1).id : null,
+        available: true, reason: null, cached, syncing: Boolean(this.reader && (cached || (!before && state?.catchingUp)
+            || (limit !== undefined && messages.slice(0, pageSize).some(message => message.readerDirty)))) };
+        const mentionUsers = new Set(); const mentionRoles = new Set();
+        for (const message of result.messages) {
+            const bodies = [message.content, message.replyTo?.content, ...(message.embeds || []).flatMap(embed => [embed.description, ...(embed.fields || []).map(field => field.value)])];
+            for (const body of bodies) {
+                if (typeof body !== 'string') continue;
+                for (const match of body.matchAll(/<@(!?)([0-9]{16,22})>|<@&([0-9]{16,22})>/g)) {
+                    const ids = match[3] ? mentionRoles : mentionUsers;
+                    if (mentionUsers.size + mentionRoles.size < 100) ids.add(match[3] || match[2]);
+                }
+            }
+        }
+        result.mentions = this.cachedMentionNames(this.readableTicket(threadId), mentionUsers, mentionRoles);
+        this.debug.write('snapshot', { ms: performance.now() - snapshotStarted, count: result.messages.length, cached, syncing: result.syncing });
+        return result;
+    }
+
+    async loadReaderConversation(threadId, before, limit) {
+        const ticket = this.readableTicket(threadId);
+        const key = `r:${this.store.index(threadId)}`;
+        let state = this.store.read(key);
+        // Old cached pages discarded rich metadata; refresh them lazily with the corrected format.
+        if (state?.format !== 3) state = null;
+        if (!state?.newestId || (limit !== undefined && !before && !this.readerLoaded.has(threadId))) {
+            const page = await this.reader.messages(ticket.guildId, threadId, { limit: limit ?? 100 });
+            await this.saveReaderPage(threadId, page.messages);
+            this.readableTicket(threadId);
+            state = { format: 3, newestId: page.messages[0]?.id ?? null, before: page.pagination.next_before, complete: page.pagination.next_before === null };
+            this.store.write(key, state);
+        } else if (!before && (state.catchingUp || !this.readerLoaded.has(threadId) || (ticket.lastMessageId && BigInt(ticket.lastMessageId) > BigInt(state.newestId)))) {
+            let after = state.newestId;
+            let newestId = after;
+            do {
+                const page = await this.reader.messages(ticket.guildId, threadId, { after, limit: limit ?? 100 });
+                await this.saveReaderPage(threadId, page.messages);
+                if (page.messages.length) newestId = page.messages[0].id;
+                after = page.pagination.next_after;
+                if (limit !== undefined) break;
+            } while (after !== null);
+            this.readableTicket(threadId);
+            state = { ...state, newestId, catchingUp: after !== null };
+            this.store.write(key, state);
+        }
+        this.readerLoaded.add(threadId);
+        if (before && !state.complete && BigInt(before) < BigInt(state.before)) throw Object.assign(new Error('Message cursor is outside loaded history.'), { status: 400 });
+        while (this.conversationMessages(threadId, { before, limit: (limit ?? 50) + 1 }).length < (limit ?? 51) && !state.complete) {
+            const page = await this.reader.messages(ticket.guildId, threadId, { before: state.before, limit: limit ?? 100 });
+            await this.saveReaderPage(threadId, page.messages);
+            this.readableTicket(threadId);
+            state = { ...state, before: page.pagination.next_before, complete: page.pagination.next_before === null };
+            this.store.write(key, state);
+            if (limit !== undefined) break;
+        }
+        for (const saved of this.conversationMessages(threadId, { before, limit: limit ?? 50 })) {
+            if (!saved.readerDirty) continue;
+            const { message } = await this.reader.message(ticket.guildId, threadId, saved.id);
+            await this.saveReaderPage(threadId, [message]);
+            const current = this.store.message(threadId, saved.id);
+            if (current?.readerDirty === saved.readerDirty && (current.editedAt || 0) <= (message.edited_timestamp ? Date.parse(message.edited_timestamp) : 0)) this.store.saveMessage(threadId, { ...current, readerDirty: false });
+            if (limit !== undefined) break;
         }
     }
 
@@ -277,7 +522,7 @@ class TicketService extends EventEmitter {
     }
 
     async backfill(thread) {
-        if (!this.settings.messageContentApproved) return;
+        if (this.reader || !this.settings.messageContentApproved) return;
         let before;
         while (!this.stopping) {
             const ticket = this.store.get(thread.id);
@@ -414,6 +659,8 @@ class TicketService extends EventEmitter {
     stop() {
         this.stopping = true;
         clearTimeout(this.summaryTimer);
+        this.reader?.close();
+        return Promise.allSettled([...this.conversationReads.values()]).then(() => this.debug.flush());
     }
 }
 

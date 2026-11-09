@@ -8,6 +8,7 @@ const { pathToFileURL } = require('node:url');
 const { TicketStore } = require('../tickets');
 const { TicketService } = require('../ticket-service');
 const { createApp } = require('../server');
+const { createChatDebug } = require('../utils/chat-debug');
 const { Collection, ChannelType, WebhookType } = require('discord.js');
 const webRoot = path.join(__dirname, '..', 'web');
 const dev = process.argv.includes('--dev');
@@ -53,9 +54,11 @@ for (let index = 0; index < 32; index++) {
         locked: index > 28, deletedAt: index === 31 ? createdAt + 20_000 : null,
     });
 }
-const guild = { id: ids.guild, members: { fetch: async ({ user }) => ({ id: user, guild, user: { id: user, username: 'Synthetic staff' }, displayName: 'Synthetic staff', displayAvatarURL: () => mockAvatar(user), roles: { cache: new Collection([[ids.role, {}]]) } }) } };
+const guild = { id: ids.guild, members: { fetch: async ({ user }) => ({ id: user, guild, user: { id: user, username: 'Synthetic staff' }, displayName: user === ids.user ? 'Synthetic staff' : cachedUsers.get(user)?.username || 'Resolved mentioned user', displayAvatarURL: () => mockAvatar(user), roles: { cache: new Collection([[ids.role, {}]]) } }) } };
 const cachedUsers = new Map(names.map((name, index) => [String(120000000000001000n + BigInt(index)), { username: name, displayAvatarURL: () => `https://cdn.discordapp.com/embed/avatars/${index % 6}.png` }]));
-const client = { user: { id: ids.bot }, users: { cache: cachedUsers }, guilds: { fetch: async () => guild }, channels: { fetch: async id => {
+guild.roles = { cache: new Map([[ids.role, { name: 'Support', hexColor: '#5865f2' }]]) };
+guild.members.cache = new Map();
+const client = { user: { id: ids.bot }, users: { cache: cachedUsers }, guilds: { cache: new Map([[ids.guild, guild]]), fetch: async () => guild }, channels: { cache: new Map([[ids.parent, { name: 'urgent-tickets' }]]), fetch: async id => {
     if (id === ids.parent) return { id, guildId: ids.guild, type: ChannelType.GuildText, permissionsFor: () => ({ has: () => true }), fetchWebhooks: async () => new Collection([[mockWebhook.id, mockWebhook]]) };
     const ticket = store.get(id);
     if (!ticket) throw Object.assign(new Error('Unknown synthetic ticket'), { code: 10003 });
@@ -79,7 +82,8 @@ const mockWebhook = { id: '120000000000000009', guildId: ids.guild, channelId: i
 if (mockChatEnabled) {
     settings.messageContentApproved = true; settings.webChatEnabled = true; settings.webRepliesEnabled = true;
 }
-const service = new TicketService(client, store, settings);
+const debug = process.env.UI_FIXTURE_DEBUG_DIR ? createChatDebug({ directory: process.env.UI_FIXTURE_DEBUG_DIR }) : undefined;
+const service = new TicketService(client, store, settings, { debug });
 if (mockChatEnabled) {
     const capabilities = service.capabilities.bind(service);
     service.capabilities = () => ({ ...capabilities(), mockChat: true });
@@ -89,7 +93,7 @@ service.sync = { ready: true, updatedAt: Date.now(), error: null };
 const provider = async url => url.endsWith('/oauth2/token') ? Response.json({ access_token: 'fixture', expires_in: 3600 }) : url.endsWith('/users/@me') ? Response.json({ id: ids.user, username: 'Synthetic staff' }) : Response.json({ user: { id: ids.user }, roles: [ids.role] });
 const pendingReplies = new Set();
 let messageSequence = 0n;
-const app = createApp({ service, settings, fetchImpl: provider, ...(mockChatEnabled ? { configureMockApi } : {}) });
+const app = createApp({ service, settings, fetchImpl: provider, debug, ...(mockChatEnabled ? { configureMockApi } : {}) });
 let backend;
 let vite;
 let closing;
@@ -115,6 +119,11 @@ function mockAvatar(userId) {
 }
 
 function configureMockApi(app, csrf) {
+    app.post('/api/mock/tickets', csrf, (req, res) => {
+        const threadId = String(120000000000002000n + (++messageSequence));
+        const ticket = store.upsert({ threadId, guildId: ids.guild, parentId: ids.parent, openerId: ids.user, openerName: 'Synthetic requester', name: 'Generic: Synthetic new ticket', type: 'Generic', description: 'Synthetic ticket created to test live list stability.', createdAt: Date.now(), lastMessageAt: Date.now() });
+        res.status(201).json({ threadId: ticket.threadId });
+    });
     app.post('/api/mock/tickets/:ticketId/messages', csrf, async (req, res, next) => {
         const { content, sender = 'staff' } = req.body || {};
         if (typeof content !== 'string' || !content.trim() || content.length > 2000 || !['staff', 'requester'].includes(sender)) return res.status(400).json({ error: 'Invalid mock message.' });
@@ -149,7 +158,7 @@ function seedConversations() {
                 authorName: bot ? 'Ticket assistant' : requester ? ticket.openerName || 'Synthetic requester' : 'Synthetic staff',
                 authorAvatarUrl: mockAvatar(authorId),
                 authorRoleColor: staff ? '#5865f2' : null, bot,
-                content, createdAt, editedAt: null,
+                content: content + (index === count - 1 ? ` Hello <@&${ids.role}> <@!120000000000009999> <@120000000000001000>.` : ''), createdAt, editedAt: null,
                 ...(index === 2 ? { replyTo: { id: snowflake(createdAt - 60_000), authorId: ids.bot, authorName: 'Ticket assistant', content: 'Thanks for the details. I have checked the order and will follow up shortly.', bot: true } } : {}),
                 reactions: index === 3 ? [{ emoji: '👍', count: 2, reacted: true }, { emoji: '✅', count: 1 }] : [],
                 embeds: index === 4 ? [{ url: `${settings.publicBaseUrl}/fixture/example-log.txt`, color: 5793266, title: 'Order status', description: 'A synthetic status update.', image: 'https://cdn.discordapp.com/embed/avatars/2.png', thumbnail: 'https://cdn.discordapp.com/embed/avatars/3.png', footer: { text: 'Synthetic support', iconUrl: 'https://cdn.discordapp.com/embed/avatars/1.png' }, author: { name: 'Support update', url: 'https://example.com/help', iconUrl: 'https://cdn.discordapp.com/embed/avatars/0.png' }, fields: [{ name: 'Order', value: 'Example #1042', inline: true }, { name: 'Status', value: 'In transit', inline: true }] }] : [],

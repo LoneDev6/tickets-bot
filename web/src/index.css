@@ -3,6 +3,12 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
+@font-face { font-family: 'gg sans'; src: url('/fonts/gg-sans-normal-400.woff2') format('woff2'); font-style: normal; font-weight: 400; font-display: swap; }
+@font-face { font-family: 'gg sans'; src: url('/fonts/gg-sans-italic-400.woff2') format('woff2'); font-style: italic; font-weight: 400; font-display: swap; }
+@font-face { font-family: 'gg sans'; src: url('/fonts/gg-sans-normal-500.woff2') format('woff2'); font-style: normal; font-weight: 500; font-display: swap; }
+@font-face { font-family: 'gg sans'; src: url('/fonts/gg-sans-normal-600.woff2') format('woff2'); font-style: normal; font-weight: 600; font-display: swap; }
+@font-face { font-family: 'gg sans'; src: url('/fonts/gg-sans-normal-700.woff2') format('woff2'); font-style: normal; font-weight: 700; font-display: swap; }
+
 @theme inline {
     --font-heading: var(--font-sans);
     --font-sans: 'Geist Variable', sans-serif;
@@ -80,6 +86,18 @@
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
+
+    --post-unread-row: oklch(0.977 0.013 236.62);
+
+    --post-unread-row-hover: color-mix(in oklab, oklch(0.951 0.026 236.824) 60%, transparent);
+
+    --post-unread-badge-background: oklch(0.951 0.026 236.824);
+
+    --post-unread-badge-foreground: oklch(0.391 0.09 240.876);
+
+    --post-unread-badge-border: oklch(0.901 0.058 230.902);
+
+    --post-unread-muted: oklch(0.443 0.11 240.79);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -115,7 +133,19 @@
       --sidebar-accent-foreground: oklch(0.985 0 0);
       --sidebar-border: oklch(1 0 0 / 10%);
       --sidebar-ring: oklch(0.556 0 0);
-    }
+
+      --post-unread-row: color-mix(in oklab, oklch(0.293 0.066 243.157) 30%, transparent);
+
+      --post-unread-row-hover: color-mix(in oklab, oklch(0.293 0.066 243.157) 50%, transparent);
+
+      --post-unread-badge-background: color-mix(in oklab, oklch(0.391 0.09 240.876) 55%, var(--background));
+
+      --post-unread-badge-foreground: oklch(0.951 0.026 236.824);
+
+      --post-unread-badge-border: oklch(0.443 0.11 240.79);
+
+      --post-unread-muted: oklch(0.828 0.111 230.318);
+}
 }
 
 @layer base {
@@ -147,17 +177,32 @@
 }
 
 /* Match the Discord renderer's palette throughout the channel and composer. */
+/* Tailwind's outer reset overrides Lit host styles unless reverted in its own layer. */
+@layer base {
+  .ticket-chat :where(discord-messages, discord-message, discord-reply, discord-attachments,
+    discord-image-attachment, discord-file-attachment, discord-embed, discord-embed-description,
+    discord-embed-fields, discord-embed-field, discord-embed-footer, discord-reactions,
+    discord-reaction, discord-bold, discord-italic, discord-underlined, discord-code,
+    discord-pre, discord-quote, discord-mention, discord-custom-emoji, discord-spoiler, discord-time) {
+    all: revert-layer;
+  }
+}
+
 .ticket-chat {
   --chat-background: #fff;
   --chat-header: #f2f3f5;
   --chat-input: #ebedef;
   --chat-text: #2e3338;
   --chat-muted: #535961;
+  --chat-link: #006ce7;
+  --chat-reply-author: #000;
   --chat-border: #dedede;
   position: relative;
   display: flex;
   flex-direction: column;
-  height: clamp(20rem, calc(100dvh - 22rem), 42rem);
+  height: 100%;
+  min-height: 0;
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--chat-border);
@@ -168,12 +213,38 @@
   font-size: 16px;
 }
 
+.post-details-disclosure {
+  max-height: 45%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.post-details-disclosure[open] { display: flex; flex-direction: column; }
+.post-details-disclosure > summary {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: .5rem;
+  padding: .625rem .75rem;
+  cursor: pointer;
+  font-size: .875rem;
+  font-weight: 500;
+  list-style: none;
+}
+.post-details-disclosure > summary::-webkit-details-marker { display: none; }
+.post-details-disclosure > summary span:first-child { margin-right: auto; }
+.post-details-disclosure > summary svg { transition: transform .15s ease; }
+.post-details-disclosure[open] > summary svg { transform: rotate(180deg); }
+.post-details-body { min-height: 0; overflow-y: auto; padding: 0 .75rem .75rem; }
+
 .ticket-chat[data-theme="dark"] {
-  --chat-background: #36393e;
-  --chat-header: #2f3136;
-  --chat-input: #40444b;
-  --chat-text: #dcddde;
-  --chat-muted: #b9bbbe;
+  --chat-background: #1a1a1e;
+  --chat-header: #121214;
+  --chat-input: #222327;
+  --chat-text: #dbdee1;
+  --chat-muted: #b5bac1;
+  --chat-link: #00a8fc;
+  --chat-reply-author: #fff;
   --chat-border: #292b2f;
 }
 
@@ -200,11 +271,21 @@
   scrollbar-color: var(--chat-muted) var(--chat-background);
 }
 
-.ticket-chat-transcript { min-height: 100%; border: 0; }
-.ticket-chat-date { display: flex; align-items: center; gap: 0.5rem; margin-inline: 1rem; color: var(--chat-muted); font-size: 12px; }
+.ticket-chat-transcript { min-height: 100%; border: 0; background: var(--chat-background); color: var(--chat-text); }
+.ticket-chat discord-message { font-size: 1rem; color: var(--chat-text); }
+.ticket-chat-link { color: var(--chat-link); text-decoration: none; }
+.ticket-chat-link:hover { text-decoration: underline; }
+.ticket-chat-attachment { width: fit-content; max-width: min(100%, 20rem); min-width: 0; }
+.ticket-chat-image { display: block; width: fit-content; max-width: 100%; }
+.ticket-chat-image img { display: block; width: auto; height: auto; max-width: 100%; max-height: 18rem; object-fit: contain; }
+.ticket-chat-image:focus-visible { outline: 2px solid #5865f2; outline-offset: -2px; }
+.ticket-chat-date { position: relative; display: flex; align-items: center; gap: 0.5rem; margin-inline: 1rem; color: var(--chat-muted); font-size: 12px; }
 .ticket-chat-date::before, .ticket-chat-date::after { content: ''; height: 1px; flex: 1; background: var(--chat-border); }
-.ticket-chat-new { position: absolute; top: 0.5rem; left: 1rem; right: 1rem; z-index: 1; background: #5865f2; color: #fff; }
-.ticket-chat-new:hover { background: #4752c4; }
+.ticket-chat-unread { color: #f23f43; }
+.ticket-chat-unread::before, .ticket-chat-unread::after { background: #f23f43; }
+.ticket-chat-unread-label { position: absolute; right: 0; padding: 0 0.25rem; border-radius: 0.2rem; background: #f23f43; color: #fff; font-size: 10px; font-weight: 600; line-height: 1.25; }
+.ticket-chat-new { position: absolute; bottom: 1rem; left: 50%; z-index: 1; width: max-content; max-width: calc(100% - 2rem); transform: translateX(-50%); background: var(--chat-input); color: var(--chat-text); border: 1px solid var(--chat-border); }
+.ticket-chat-new:hover { background: var(--chat-header); }
 .ticket-chat-composer { flex: none; padding: 0.75rem 1rem 0.5rem; }
 .ticket-chat-input-row { display: flex; align-items: end; gap: 0.5rem; padding: 0.25rem 0.5rem; border-radius: 0.5rem; background: var(--chat-input); }
 .ticket-chat-input-row:focus-within { outline: 2px solid #5865f2; outline-offset: 2px; }
@@ -216,3 +297,8 @@
 .ticket-chat-hint > span:first-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .ticket-chat-hint > span:last-child { flex: none; }
 .ticket-chat-readonly { flex: none; padding: 0.75rem 1rem; border-top: 1px solid var(--chat-border); color: var(--chat-muted); font-size: 13px; }
+
+.post-unread-row { background-color: var(--post-unread-row); }
+.post-unread-row:hover { background-color: var(--post-unread-row-hover); }
+.post-unread-row .text-muted-foreground { color: var(--post-unread-muted); }
+.post-unread-badge { border-color: var(--post-unread-badge-border); background-color: var(--post-unread-badge-background); color: var(--post-unread-badge-foreground); }

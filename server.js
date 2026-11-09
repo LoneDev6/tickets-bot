@@ -6,15 +6,17 @@ const path = require('node:path');
 const { existsSync } = require('node:fs');
 const { ID, STATUSES, publicTicket } = require('./tickets');
 const { privacyPolicy } = require('./privacy');
+const { DiscordReaderError, isSnowflake } = require('./discord-reader');
+const { chatDebug } = require('./utils/chat-debug');
 
 const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 function sameToken(a, b) {
     return typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
-function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger = console, staticDir = path.join(__dirname, 'web', 'dist'), configureMockApi }) {
+function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger = console, staticDir = path.join(__dirname, 'web', 'dist'), configureMockApi, debug = chatDebug }) {
     if (configureMockApi && !settings.development) throw new Error('Mock APIs require development mode.');
-    const serializeTicket = ticket => publicTicket(ticket, service.client.users?.cache?.get(ticket.openerId));
+    const serializeTicket = ticket => ({ ...publicTicket(ticket, service.client.users?.cache?.get(ticket.openerId)), parentName: service.client.channels?.cache?.get(ticket.parentId)?.name || null });
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -34,6 +36,28 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger 
         if (secure) res.set('Strict-Transport-Security', 'max-age=31536000');
         if (settings.publicBaseUrl && secure && (!req.secure || req.hostname !== new URL(settings.publicBaseUrl).hostname)) return res.status(421).json({ error: 'Use the public HTTPS address of the dashboard.' });
         next();
+    });
+    app.use((req, res, next) => {
+        const op = req.method === 'GET' ? req.path === '/api/session' ? 'session' : req.path === '/api/tickets' ? 'list'
+            : /^\/api\/tickets\/\d+\/messages$/.test(req.path) ? 'messages' : /^\/api\/tickets\/\d+\/mentions$/.test(req.path) ? 'mentions' : /^\/api\/tickets\/\d+$/.test(req.path) ? 'detail' : null
+            : req.method === 'POST' && req.path === '/api/debug/chat' ? 'browser' : req.method === 'POST' && /^\/api\/tickets\/\d+\/reply$/.test(req.path) ? 'reply' : null;
+        if (!op || !debug.enabled()) return next();
+        debug.run({ op, viewId: req.get('X-Chat-View'), ticketId: req.path.match(/^\/api\/tickets\/(\d{16,22})(?:\/|$)/)?.[1], requestPath: req.path }, () => {
+            const context = debug.current();
+            if (!context) return next();
+            const started = performance.now();
+            res.set({ 'X-Chat-Request-Id': context.requestId, 'X-Chat-Debug': '1' });
+            debug.write('http_start', { cached: req.query.cached === '1', limit: Number(req.query.limit) });
+            let finished = false;
+            const finish = aborted => {
+                if (finished) return;
+                finished = true;
+                debug.write('http_end', { ...context, ms: performance.now() - started, status: res.statusCode, aborted });
+            };
+            res.once('finish', () => finish(false));
+            res.once('close', () => finish(!res.writableFinished));
+            next();
+        });
     });
     app.get('/health', (_req, res) => res.json({ ready: service.sync.ready }));
     app.get('/api/privacy', (_req, res) => res.json(privacyPolicy(settings)));
@@ -64,30 +88,42 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger 
         return response.json();
     }
     async function authorized(data) {
-        if (!data?.user || !ID.test(data.user.id || '')) {
-            const error = new Error('Your session has expired.'); error.status = 401; throw error;
-        }
-        let check = memberChecks.get(data.user.id);
-        if (!check) {
-            check = Promise.resolve().then(async () => {
-                const guild = await service.client.guilds.fetch(settings.guildId);
-                if (guild.id !== settings.guildId) throw new Error('Unexpected authorization guild.');
-                return guild.members.fetch({ user: data.user.id, force: true, cache: false });
-            }).finally(() => memberChecks.delete(data.user.id));
-            memberChecks.set(data.user.id, check);
-        }
-        let member;
-        try { member = await check; }
-        catch (error) {
-            logger.warn('Dashboard Discord member verification failed.', { status: Number.isFinite(error.status) ? error.status : 503, ...(Number.isFinite(error.code) ? { code: error.code } : {}) });
-            throw Object.assign(new Error('Discord member verification unavailable.'), { status: Number(error.code) === 10007 ? 403 : 503 });
-        }
-        if (member.id !== data.user.id || !member.roles?.cache?.has(settings.supportRoleId)) {
-            const error = new Error('Staff authorization required.'); error.status = 403; throw error;
-        }
+        const timing = { shared: false };
+        return debug.time('staff_auth', async () => {
+            if (!data?.user || !ID.test(data.user.id || '')) {
+                const error = new Error('Your session has expired.'); error.status = 401; throw error;
+            }
+            let check = memberChecks.get(data.user.id);
+            timing.shared = Boolean(check);
+            if (!check) {
+                check = Promise.resolve().then(async () => {
+                    const guild = await service.client.guilds.fetch(settings.guildId);
+                    if (guild.id !== settings.guildId) throw new Error('Unexpected authorization guild.');
+                    return guild.members.fetch({ user: data.user.id, force: true, cache: false });
+                }).finally(() => memberChecks.delete(data.user.id));
+                memberChecks.set(data.user.id, check);
+            }
+            let member;
+            try { member = await check; }
+            catch (error) {
+                logger.warn('Dashboard Discord member verification failed.', { status: Number.isFinite(error.status) ? error.status : 503, ...(Number.isFinite(error.code) ? { code: error.code } : {}) });
+                throw Object.assign(new Error('Discord member verification unavailable.'), { status: Number(error.code) === 10007 ? 403 : 503 });
+            }
+            if (member.id !== data.user.id || !member.roles?.cache?.has(settings.supportRoleId)) {
+                const error = new Error('Staff authorization required.'); error.status = 403; throw error;
+            }
+            return member;
+        }, timing);
+    }
+    async function recheckStaff(req) {
+        return debug.time('staff_recheck', async () => {
+            const current = await new Promise((resolve, reject) => store.get(req.sessionID, (error, data) => error ? reject(error) : resolve(data)));
+            await authorized(current);
+            service.store.expire(req.params.ticketId);
+        });
     }
     const requireStaff = asyncRoute(async (req, res, next) => {
-        try { await authorized(req.session); next(); }
+        try { req.staffMember = await authorized(req.session); next(); }
         catch (error) {
             if ([401, 403].includes(error.status)) req.session.destroy(() => {});
             res.status(error.status || 503).json({ error: error.status === 403 ? 'Only authorized support staff can access this dashboard.' : error.status === 401 ? 'Your session has expired. Sign in with Discord.' : 'Could not verify Discord permissions. Please retry.' });
@@ -135,8 +171,18 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger 
             res.clearCookie(cookieName, { secure, httpOnly: true, sameSite: 'lax', path: '/' }).status(204).end();
         });
     });
-    app.get('/api/session', requireStaff, (req, res) => res.json({ user: req.session.user, csrfToken: req.session.csrfToken, capabilities: service.capabilities(), sync: service.sync }));
-    app.use('/api', requireStaff, (_req, _res, next) => { service.store.expire(); next(); });
+    app.get('/api/session', requireStaff, (req, res) => res.json({ user: { ...req.session.user, displayName: req.staffMember.displayName || req.session.user.username, avatarUrl: req.staffMember.displayAvatarURL?.({ size: 128 }) || null }, csrfToken: req.session.csrfToken, capabilities: { ...service.capabilities(), replyClientNonce: true, mentionNames: true, ...(debug.enabled() ? { chatDebug: true } : {}) }, sync: service.sync }));
+    app.use('/api', requireStaff);
+    app.post('/api/debug/chat', csrf, (req, res) => {
+        if (!debug.enabled()) return res.sendStatus(404);
+        const body = req.body;
+        if (!body || Object.keys(body).some(key => !['viewId', 'readyMs', 'firstDataMs', 'moduleMs', 'count', 'cached', 'visible'].includes(key))
+            || typeof body.viewId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(body.viewId)
+            || ['readyMs', 'firstDataMs', 'moduleMs'].some(key => !Number.isFinite(body[key]) || body[key] < 0 || body[key] > 600000)
+            || !Number.isInteger(body.count) || body.count < 0 || body.count > 10000 || typeof body.cached !== 'boolean' || typeof body.visible !== 'boolean') return res.status(400).json({ error: 'Invalid timing report.' });
+        debug.write('browser_ready', { viewId: body.viewId, readyMs: body.readyMs, firstDataMs: body.firstDataMs, moduleMs: body.moduleMs, count: body.count, cached: body.cached, visible: body.visible });
+        res.sendStatus(204);
+    });
     app.get('/api/tickets', (req, res) => {
         const { status = 'open', type = 'all', q = '', opener = '', sort = 'updated', page = '1', pageSize = '25', cursor, revision } = req.query;
         if (![...STATUSES, 'all'].includes(status) || !['all', 'Generic', 'Payment'].includes(type) || !['updated', 'created', 'priority'].includes(sort)
@@ -144,23 +190,44 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger 
             || (revision !== undefined && (typeof revision !== 'string' || !/^\d{1,16}$/.test(revision))) || (cursor && revision === undefined)
             || typeof q !== 'string' || q.length > 200 || typeof page !== 'string' || typeof pageSize !== 'string'
             || !/^\d{1,6}$/.test(page) || !/^\d{1,3}$/.test(pageSize) || Number(page) < 1 || Number(pageSize) < 1 || Number(pageSize) > 100) return res.status(400).json({ error: 'Invalid filters.' });
+        service.store.expire();
         if (cursor && Number(revision) !== service.store.revision) return res.status(409).json({ error: 'The ticket list changed. Reload the results.' });
-        const result = service.store.list({ status, type, q, opener, sort, page: Number(page), pageSize: Number(pageSize), cursor });
+        const filters = { status, type, q, opener, sort, page: Number(page), pageSize: Number(pageSize), cursor };
+        const result = service.store.list(filters);
         res.json({ ...result, tickets: result.tickets.map(serializeTicket), sync: service.sync });
     });
     app.param('ticketId', (req, res, next, value) => {
         if (!ID.test(value)) return res.status(400).json({ error: 'Invalid ticket ID.' });
+        service.store.expire(value);
         const ticket = service.store.get(value);
         if (!ticket || ticket.guildId !== settings.guildId || !(settings.ticketParentIds || [settings.ticketParentId]).includes(ticket.parentId)) return res.status(404).json({ error: 'Ticket not found or no longer retained.' });
         req.ticket = ticket; next();
     });
     app.get('/api/tickets/:ticketId', (req, res) => res.json({ ticket: serializeTicket(req.ticket) }));
-    app.get('/api/tickets/:ticketId/messages', (req, res) => {
+    app.get('/api/tickets/:ticketId/messages', asyncRoute(async (req, res) => {
         if (!service.capabilities().canReadConversation || req.ticket.contentExcluded) return res.status(409).json({ error: req.ticket.contentExcluded ? 'Web chat is excluded for this ticket.' : service.capabilities().reason });
-        if (req.query.before !== undefined && !ID.test(req.query.before)) return res.status(400).json({ error: 'Invalid message cursor.' });
-        const messages = service.store.messages(req.ticket.threadId, { before: req.query.before, limit: 51 });
-        res.json({ messages: messages.slice(0, 50), nextBefore: messages.length > 50 ? messages[49].id : null, available: true, reason: null });
-    });
+        if (req.query.before !== undefined && (typeof req.query.before !== 'string' || !ID.test(req.query.before) || (service.reader && !isSnowflake(req.query.before)))) return res.status(400).json({ error: 'Invalid message cursor.' });
+        if ((req.query.limit !== undefined && (typeof req.query.limit !== 'string' || !/^(?:[1-9]|[1-4][0-9]|50)$/.test(req.query.limit)))
+            || (req.query.cached !== undefined && req.query.cached !== '1')
+            || Object.keys(req.query).some(key => !['before', 'limit', 'cached'].includes(key))) return res.status(400).json({ error: 'Invalid conversation parameters.' });
+        const result = await service.conversation(req.ticket.threadId, { before: req.query.before,
+            ...(req.query.limit !== undefined ? { limit: Number(req.query.limit) } : {}), cached: req.query.cached === '1' });
+        if (res.destroyed) return;
+        await recheckStaff(req);
+        service.readableTicket(req.ticket.threadId);
+        res.json(result);
+    }));
+    app.get('/api/tickets/:ticketId/mentions', asyncRoute(async (req, res) => {
+        if (Object.keys(req.query).some(key => !['users', 'roles'].includes(key))) return res.status(400).json({ error: 'Invalid mention query.' });
+        const ids = value => value === undefined ? [] : typeof value === 'string' && value.length <= 100 ? value.split(',') : null;
+        const users = ids(req.query.users); const roles = ids(req.query.roles);
+        if (!users || !roles || users.length + roles.length > 4 || [...users, ...roles].some(id => !ID.test(id))) return res.status(400).json({ error: 'Invalid mention IDs.' });
+        const names = await service.resolveMentions(req.ticket.threadId, { users, roles });
+        if (res.destroyed) return;
+        await recheckStaff(req);
+        service.readableTicket(req.ticket.threadId);
+        res.json(names);
+    }));
     app.post('/api/tickets/:ticketId/actions', csrf, asyncRoute(async (req, res) => {
         const { action, reason = '' } = req.body || {};
         if (!['close', 'close-lock', 'reopen', 'escalate', 'resolve-escalation'].includes(action) || typeof reason !== 'string' || reason.length > 500) return res.status(400).json({ error: 'Invalid ticket action or reason.' });
@@ -178,9 +245,10 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger 
     });
     app.post('/api/tickets/:ticketId/reply', csrf, asyncRoute(async (req, res) => {
         if (!service.capabilities().canReply) return res.status(409).json({ error: service.capabilities().reason });
-        if (!req.body || Object.keys(req.body).some(key => key !== 'content') || typeof req.body.content !== 'string' || !req.body.content.trim() || req.body.content.length > 2000) return res.status(400).json({ error: 'A reply must contain only content, between 1 and 2000 characters.' });
+        if (!req.body || Object.keys(req.body).some(key => !['content', 'clientNonce'].includes(key)) || typeof req.body.content !== 'string' || !req.body.content.trim() || req.body.content.length > 2000
+            || (req.body.clientNonce !== undefined && (typeof req.body.clientNonce !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(req.body.clientNonce)))) return res.status(400).json({ error: 'Invalid reply content or correlation ID.' });
         const guild = await service.client.guilds.fetch(settings.guildId);
-        const messageId = await service.reply(req.ticket.threadId, { id: req.session.user.id, guild }, req.body.content);
+        const messageId = await service.reply(req.ticket.threadId, { id: req.session.user.id, guild }, req.body.content, req.body.clientNonce);
         res.status(201).json({ messageId });
     }));
     app.all('/api/tickets/:ticketId/:action', csrf, (_req, res) => res.status(409).json({ error: 'Replies are currently available in Discord.' }));
@@ -224,6 +292,10 @@ function createApp({ service, settings, fetchImpl = fetch, sessionStore, logger 
     } else app.get(['/', '/privacy'], (_req, res) => res.status(503).type('text').send('Dashboard build missing. Build locally and distribute web/dist. Privacy policy: /api/privacy'));
     app.use((error, _req, res, _next) => {
         if (res.headersSent) return res.end();
+        if (error instanceof DiscordReaderError) {
+            if (error.retryAfter) res.set('Retry-After', String(error.retryAfter));
+            return res.status(error.status === 429 ? 429 : 503).json({ error: error.message });
+        }
         const status = [400, 401, 403, 404, 409, 413, 429, 503].includes(error.status) ? error.status : 500;
         res.status(status).json({ error: status === 500 ? 'An internal error occurred. Please retry.' : status === 403 ? 'Access denied.' : status === 409 ? 'The ticket or list changed, or another action is in progress. Refresh and retry.' : status === 400 ? 'Invalid request parameters.' : 'Request failed. Sign in again or reload the dashboard.' });
     });

@@ -3,7 +3,7 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('
 function creationPanel(settings) {
     const privacyUrl = `${settings.publicBaseUrl}/privacy`;
     return {
-        embeds: [new EmbedBuilder().setTitle('Private Support Ticket').setColor('#a0401a').setDescription(`Private tickets are only for rare occasions. Invalid requests may be removed.\nFor plugin bugs use GitHub; for general help use the public support channels after verification. Read the tutorials and search Discord and GitHub before opening a ticket.\n\nAuthorized support staff can manage your ticket through our private dashboard. ${settings.messageContentApproved ? 'Conversation content is archived on our server.' : 'Full conversation archiving is disabled pending Discord authorization.'}\nTicket data is retained while open and up to 30 days after closure.\n[Read the privacy policy](${privacyUrl}) · Privacy and deletion: info@devs.beer`)],
+        embeds: [new EmbedBuilder().setTitle('Private Support Ticket').setColor('#a0401a').setDescription(`Private tickets are only for rare occasions. Invalid requests may be removed.\nFor plugin bugs use GitHub; for general help use the public support channels after verification. Read the tutorials and search Discord and GitHub before opening a ticket.\n\nAuthorized support staff can manage your ticket through our private dashboard. ${(settings.discordReaderApiKey || settings.messageContentApproved) ? 'Conversation content is archived on our server.' : 'Full conversation archiving is disabled pending Discord authorization.'}\nTicket data is retained without automatic expiry, including after closure. Deleting the Discord thread removes its local conversation.\n[Read the privacy policy](${privacyUrl}) · Use /tickets-privacy for exclusion or deletion · Privacy contact: info@devs.beer`)],
         components: [new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('ticket_panel_create_thread_generic').setLabel('Generic').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId('ticket_panel_create_thread_payment').setLabel('Payment issue').setStyle(ButtonStyle.Secondary),
@@ -15,7 +15,7 @@ function creationPanel(settings) {
 
 async function refreshCreationPanels(client, settings, store) {
     if (!settings.publicBaseUrl) return;
-    const version = `privacy-v2:${settings.publicBaseUrl}:${settings.messageContentApproved}`;
+    const version = `privacy-v5:${settings.publicBaseUrl}:${Boolean(settings.discordReaderApiKey || settings.messageContentApproved)}`;
     if (store.read('meta:creation-panel-version') === version) return;
     const channel = await client.channels.fetch(settings.ticketParentId);
     if (!channel || channel.guildId !== settings.guildId || !channel.isTextBased()) throw new Error('Ticket creation channel unavailable.');

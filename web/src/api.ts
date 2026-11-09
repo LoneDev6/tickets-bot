@@ -8,14 +8,17 @@ export type SyncState = {
 }
 
 export type Session = {
-  user: { id: string; username: string }
+  user: { id: string; username: string; displayName?: string; avatarUrl?: string | null }
   csrfToken: string
   capabilities: {
     canReadConversation: boolean
     canArchiveConversation: boolean
     canReply: boolean
     canManageTicket: boolean
+    replyClientNonce?: boolean
+    mentionNames?: boolean
     mockChat?: boolean
+    chatDebug?: boolean
     reason: string
   }
   sync: SyncState
@@ -23,6 +26,7 @@ export type Session = {
 
 export type Ticket = {
   threadId: string
+  parentName?: string | null
   name: string | null
   openerId: string | null
   openerName: string | null
@@ -65,6 +69,7 @@ export type TicketList = {
 }
 
 export type TicketMessage = {
+  clientNonce?: string
   id: string
   authorId: string
   authorName: string
@@ -76,17 +81,22 @@ export type TicketMessage = {
   bot?: boolean
   webhookId?: string | null
   staffAuthorId?: string
-  replyTo?: { id: string; authorId: string; authorName: string; content: string; bot?: boolean }
+  replyTo?: { id: string; authorId: string; authorName: string; authorAvatarUrl?: string | null; content: string; bot?: boolean }
   reactions?: { emoji: string; count: number; reacted?: boolean }[]
   attachments: { name: string; url: string; contentType?: string; size?: number }[]
   embeds?: { title?: string | null; description?: string | null; url?: string; color?: number; image?: string; thumbnail?: string; footer?: { text: string; iconUrl?: string }; author?: { name: string; url?: string; iconUrl?: string }; fields?: { name: string; value: string; inline?: boolean }[] }[]
 }
 
+export type MentionNames = { users: Record<string, string>; roles: Record<string, string>; roleColors?: Record<string, string> }
+
 export type TicketMessages = {
+  mentions?: MentionNames
   messages: TicketMessage[]
   nextBefore: string | null
   available: boolean
   reason: string | null
+  cached?: boolean
+  syncing?: boolean
 }
 
 export type PrivacyPolicy = {
@@ -106,10 +116,10 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
+export async function apiGet<T>(path: string, signal?: AbortSignal, viewId?: string): Promise<T> {
   let response: Response
   try {
-    response = await fetch(path, { signal, headers: { Accept: "application/json" } })
+    response = await fetch(path, { signal, headers: { Accept: "application/json", ...(viewId ? { "X-Chat-View": viewId } : {}) } })
   } catch (error) {
     if (signal?.aborted) throw error
     throw new ApiError("The server connection is unavailable. Please try again.", 503)

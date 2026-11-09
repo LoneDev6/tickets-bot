@@ -67,7 +67,7 @@ async function main({ signal, onShutdown = () => {} } = {}) {
     async function interactionHandler(interaction) {
         if (!interaction.inGuild() || interaction.guildId !== settings.guildId) return;
         if (interaction.isChatInputCommand()) {
-            if (interaction.commandName === 'privacy') {
+            if (interaction.commandName === 'privacy' || interaction.commandName === 'tickets-privacy') {
                 return interaction.reply({ content: `${privacyText}\nYou can exclude your ticket content from the web copy or request deletion of your local data. Discord messages are unaffected.`, ephemeral: true,
                     components: [row(button('privacy_exclude', 'Exclude web copy'), button('privacy_delete_request', 'Delete my local data', ButtonStyle.Danger))] });
             }
@@ -151,7 +151,7 @@ async function main({ signal, onShutdown = () => {} } = {}) {
                 if (!['question1', 'question2', 'question3'].every(id => interaction.fields.getTextInputValue(id).trim().toLowerCase() === 'yes')) return interaction.editReply({ content: 'Answer YES to all three questions before opening a private ticket.' });
                 const type = interaction.customId === 'modal_ticket_panel_create_thread_generic' ? 'Generic' : interaction.customId === 'modal_ticket_panel_create_thread_payment' ? 'Payment' : null;
                 const thread = await service.create(interaction, type, interaction.fields.getTextInputValue('description'));
-                return interaction.editReply({ content: 'Ticket created.', components: [row(link(thread.url, 'Go to Ticket'))] });
+                return interaction.editReply({ content: store.get(thread.id)?.setupComplete ? 'Ticket created.' : 'Ticket created, but setup is incomplete. Please ask support to check its configuration.', components: [row(link(thread.url, 'Go to Ticket'))] });
             }
             if (['modal_ticket_panel_close_thread', 'modal_ticket_panel_lock_thread'].includes(interaction.customId)) {
                 await interaction.deferReply({ ephemeral: true });
@@ -174,8 +174,12 @@ async function main({ signal, onShutdown = () => {} } = {}) {
         }
     }
     event(Events.InteractionCreate, interaction => interactionHandler(interaction).catch(error => replyError(interaction, error)));
-    event(Events.ThreadCreate, thread => { if (initialized) service.recordThread(thread); });
-    event(Events.ThreadUpdate, (_old, thread) => { if (initialized) service.recordThread(thread); });
+    event(Events.ThreadCreate, thread => {
+        if (initialized) service.recordThread(thread);
+    });
+    event(Events.ThreadUpdate, (_old, thread) => {
+        if (initialized) service.recordThread(thread);
+    });
     event(Events.ThreadDelete, thread => {
         if (!initialized || !service.scoped(thread) || !store.get(thread.id)) return;
         store.clearMessages(thread.id); store.upsert({ threadId: thread.id, deletedAt: Date.now(), description: null });
@@ -183,6 +187,7 @@ async function main({ signal, onShutdown = () => {} } = {}) {
     event(Events.MessageCreate, message => { if (initialized) return service.handleMessage(message); });
     event(Events.MessageUpdate, async (_old, message) => {
         if (!initialized || !store.get(message.channelId)) return;
+        if (service.reader) return service.updatedMessage(message);
         if (message.partial && settings.messageContentApproved) message = await message.fetch();
         if (!message.partial) await service.handleMessage(message);
     });
@@ -190,7 +195,10 @@ async function main({ signal, onShutdown = () => {} } = {}) {
     event(Events.MessageBulkDelete, messages => Promise.all([...messages.values()].map(message => initialized && service.deletedMessage(message.channelId, message.id))));
     event(Events.ShardDisconnect, () => service.setSync({ ready: false, error: 'Disconnected from Discord.' }));
     event(Events.ShardReconnecting, () => service.setSync({ ready: false, error: 'Reconnecting to Discord.' }));
-    event(Events.ShardResume, () => initialized && service.reconcile());
+    event(Events.ShardResume, () => {
+        service.readerLoaded.clear();
+        return initialized && service.reconcile();
+    });
     event(Events.Error, error => logger.error('Discord client error.', error));
     event(Events.ClientReady, async () => {
         try {
@@ -199,9 +207,22 @@ async function main({ signal, onShutdown = () => {} } = {}) {
             const commands = [
                 new SlashCommandBuilder().setName('ticket-panel').setDescription('Create the private ticket panel.').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
                 new SlashCommandBuilder().setName('privacy').setDescription('Privacy, web-copy exclusion and local data deletion.'),
+                new SlashCommandBuilder().setName('tickets-privacy').setDescription('Ticket privacy policy, web-copy exclusion and local data deletion.'),
                 new SlashCommandBuilder().setName('ticket-open').setDescription('Join a private ticket as authorized support.').addStringOption(option => option.setName('id').setDescription('Ticket thread ID').setRequired(true)),
                 new SlashCommandBuilder().setName('rename').setDescription('Rename a ticket or channel.'),
-                ...['close', 'lock', 'escalate'].map(name => new SlashCommandBuilder().setName(name).setDescription(`${name === 'close' ? 'Close the ticket' : name === 'lock' ? 'Close and lock the ticket' : 'Escalate the ticket to the owner'}.`).addStringOption(option => option.setName('reason').setDescription('Reason').setMaxLength(500))),
+                ...['close', 'lock', 'escalate'].map(name => new SlashCommandBuilder().setName(name).setDescription(`${name === 'close' ? 'Close the ticket' : name === 'lock' ? 'Close and lock the ticket' : 'Escalate the ticket to the owner'}.`).addStringOption(option => {
+                    option.setName('reason').setDescription('Reason').setMaxLength(500);
+                    if (name === 'close') option.addChoices({ name: 'Solved', value: 'Solved' }, { name: 'Inactivity', value: 'Inactivity' });
+                    if (name === 'lock') option.addChoices(
+                        { name: 'Solved. No further messages are expected.', value: 'Solved. No further messages are expected.' },
+                        { name: 'Invalid Section', value: 'Invalid section.' },
+                        { name: 'No information provided', value: 'No information provided.' },
+                        { name: 'Duplicate', value: 'Duplicate' },
+                        { name: 'Spam', value: 'Spam' },
+                        { name: 'Inappropriate', value: 'Inappropriate' },
+                    );
+                    return option;
+                })),
             ];
             for (const command of commands) { cancellation.signal.throwIfAborted(); await guild.commands.create(command); }
             cancellation.signal.throwIfAborted();
@@ -219,7 +240,7 @@ async function main({ signal, onShutdown = () => {} } = {}) {
             retentionInterval = setInterval(() => store.expire(), 60_000);
             interval = setInterval(() => track(() => service.reconcile(), 'Periodic reconciliation failed.'), 15 * 60_000);
             service.scheduleSummary();
-            if (settings.messageContentApproved) {
+            if (settings.messageContentApproved && !service.reader) {
                 for (const ticket of store.all()) {
                     if (shuttingDown) break;
                     try { if (!ticket.contentExcluded && ticket.status !== 'deleted') await service.backfill(await service.thread(ticket.threadId)); }

@@ -52,13 +52,16 @@ test('staff replies use an owned parent webhook, authenticated server name/avata
 
 test('webhook attribution survives Gateway/backfill echoes and a newer edit arriving before the send response', async t => {
     const f = fixture(t);
+    const nonce = '550e8400-e29b-41d4-a716-446655440000';
     f.hook.beforeReturn = message => f.service.handleMessage({ ...message, content: 'Newer edit', editedTimestamp: message.createdTimestamp + 100 });
-    const id = await f.service.reply(ids.ticket, f.member, 'Original');
+    const id = await f.service.reply(ids.ticket, f.member, 'Original', nonce);
     assert.equal(f.store.message(ids.ticket, id).content, 'Newer edit');
     assert.equal(f.store.message(ids.ticket, id).authorId, ids.staff);
+    assert.equal(f.store.message(ids.ticket, id).clientNonce, nonce);
     await f.service.handleMessage({ ...f.hook.lastMessage, content: 'Gateway edit', editedTimestamp: Date.now() + 500 });
     assert.equal(f.store.message(ids.ticket, id).content, 'Gateway edit');
     assert.equal(f.store.message(ids.ticket, id).authorId, ids.staff);
+    assert.equal(f.store.message(ids.ticket, id).clientNonce, nonce);
     assert.equal(f.store.get(ids.ticket).lastMessageAuthorName, 'Alice on this server');
     const otherTicket = '120000000000000010'; f.makeThread(otherTicket);
     const untrusted = { ...f.hook.lastMessage, id: '120000000000002000', channelId: otherTicket };

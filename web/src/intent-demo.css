@@ -1,0 +1,36 @@
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; min-height: 100%; }
+body { background: #1e1f22; color: #dbdee1; font-family: "gg sans", Arial, sans-serif; }
+button { font: inherit; cursor: default; }
+a { color: #00a8fc; text-decoration: none; }
+.demo-notice { height: 36px; display: grid; place-items: center; background: #f0b232; color: #1e1f22; font-size: 12px; font-weight: 700; letter-spacing: .08em; }
+.demo-app { height: 824px; min-width: 1060px; display: flex; }
+.demo-servers { width: 72px; flex: none; background: #1e1f22; padding: 13px 12px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.demo-server-home,.demo-server,.demo-server-add { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 16px; font-size: 25px; font-weight: 700; }
+.demo-server-home { background: #5865f2; color: white; border-radius: 16px; }
+.demo-server { background: #3f4248; color: #fff; font-size: 18px; }
+.demo-server-add { color: #23a559; background: #313338; }
+.demo-channels { width: 240px; flex: none; background: #2b2d31; position: relative; }
+.demo-server-title { height: 49px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; color: #fff; font-weight: 700; box-shadow: 0 1px 0 #242528; }
+.demo-channel-group { color: #949ba4; display: flex; flex-direction: row-reverse; justify-content: flex-end; align-items: center; gap: 4px; margin: 25px 8px 7px 11px; font-size: 11px; font-weight: 700; letter-spacing: .02em; }
+.demo-channel { color: #949ba4; margin: 2px 8px; padding: 7px 9px; display: flex; align-items: center; gap: 7px; border-radius: 4px; font-size: 15px; font-weight: 500; }
+.demo-channel.active { color: #f2f3f5; background: #404249; }
+.demo-account { position: absolute; bottom: 0; left: 0; right: 0; height: 53px; display: flex; align-items: center; gap: 8px; background: #232428; padding: 7px; color: #f2f3f5; font-size: 12px; }
+.demo-account div:nth-child(2) { flex: 1; }
+.demo-account small { display: block; color: #949ba4; font-size: 11px; }
+.demo-avatar { flex: none; width: 32px; height: 32px; background: #5865f2; color: white; border-radius: 50%; display: inline-grid; place-items: center; font-weight: 700; }
+.demo-avatar.bot { background: #a0401a; }.demo-avatar.user { background: #419665; }
+.demo-main { min-width: 0; flex: 1; background: #313338; position: relative; display: flex; flex-direction: column; }
+.demo-top { height: 49px; flex: none; display: flex; align-items: center; gap: 9px; padding: 0 17px; box-shadow: 0 1px 0 #27282c; color: #b5bac1; }
+.demo-top strong { color: #fff; font-size: 15px; }.demo-top-topic { padding-left: 14px; border-left: 1px solid #505257; font-size: 13px; flex: 1; }
+.demo-chat { flex: 1; overflow: hidden; padding: 0 17px 8px; display: flex; flex-direction: column; justify-content: flex-end; }
+.demo-intro { padding: 0 0 12px 17px; }.demo-intro h1 { margin: 12px 0 5px; color: #fff; font-size: 25px; }.demo-intro p { margin: 0; color: #b5bac1; font-size: 14px; }
+.demo-intro-icon { width: 55px; height: 55px; border-radius: 50%; background: #4e5058; display: grid; place-items: center; color: white; }
+.demo-divider { border-top: 1px solid #44464c; text-align: center; position: relative; margin: 14px 0; }.demo-divider span { position: relative; top: -10px; background: #313338; color: #949ba4; font-size: 11px; padding: 0 7px; }
+discord-messages { --background-color: #313338; display: block; background: #313338; }
+.demo-buttons { display: flex; gap: 8px; margin-top: 12px; }.demo-buttons button,.demo-buttons a { display: inline-block; background: #4e5058; color: #fff; border: 0; border-radius: 3px; padding: 8px 15px; font-size: 13px; font-weight: 500; }.demo-buttons button:first-child { background: #5865f2; }.demo-buttons button.danger { background: #da373c; }
+.demo-after-message { padding-left: 56px; margin-top: -8px; margin-bottom: 10px; }
+.demo-ephemeral { display: inline-block; color: #b4a3e6; background: #3c3154; border-radius: 3px; padding: 3px 7px; font-size: 11px; margin-bottom: 7px; }
+.demo-composer { height: 46px; margin: 15px 16px 22px; padding: 0 15px; background: #383a40; border-radius: 8px; display: flex; align-items: center; gap: 14px; color: #949ba4; font-size: 14px; }.demo-composer span { flex: 1; }
+.demo-members { width: 220px; flex: none; background: #2b2d31; padding: 24px 15px; }.demo-members-heading { color: #949ba4; font-size: 11px; font-weight: 700; margin-bottom: 12px; }.demo-members > div:not(:first-child) { display: flex; align-items: center; gap: 9px; color: #b5bac1; font-size: 13px; margin: 12px 0; }
+.demo-caption { height: 40px; display: grid; place-items: center; color: #fff; font-size: 12px; background: #1e1f22; }

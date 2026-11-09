@@ -5,6 +5,10 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const harness = `
+if (process.env.TEST_CHAT_DEBUG_DIR) {
+    const debug = require('./utils/chat-debug');
+    debug.chatDebug = debug.createChatDebug({ directory: process.env.TEST_CHAT_DEBUG_DIR });
+}
 const { run } = require('./index');
 const mode = process.argv[1];
 if (mode.startsWith('bot-')) {
@@ -89,9 +93,9 @@ if (mode.startsWith('bot-')) {
 }
 `;
 
-function launch(t, mode, port = 0) {
+function launch(t, mode, port = 0, debugDirectory) {
     const child = spawn(process.execPath, ['-e', harness, mode, String(port)], {
-        cwd: root, env: { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, DATA_DIR: process.env.TMPDIR },
+        cwd: root, env: { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, DATA_DIR: process.env.TMPDIR, ...(debugDirectory ? { TEST_CHAT_DEBUG_DIR: debugDirectory } : {}) },
         stdio: ['pipe', 'pipe', 'pipe'],
     });
     let output = '';
@@ -110,8 +114,8 @@ function launch(t, mode, port = 0) {
         await finished;
         assert(child.exitCode !== null || child.signalCode !== null, 'task child must not survive the test');
     });
-    const waitFor = text => new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { waiting.delete(check); reject(new Error('Missing ' + text + ': ' + output)); }, 4000);
+    const waitFor = (text, timeoutMs = 4000) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { waiting.delete(check); reject(new Error('Missing ' + text + ': ' + output)); }, timeoutMs);
         const check = () => {
             if (!output.includes(text)) return;
             clearTimeout(timer); waiting.delete(check); resolve();
@@ -122,7 +126,7 @@ function launch(t, mode, port = 0) {
 }
 
 test('console stop, fragmented CRLF and Unix signals exit cleanly even before startup returns', { timeout: 12_000 }, async t => {
-    for (const command of ['stop', 'exit', 'quit', '^C', 'SIGINT', 'SIGTERM', 'SIGHUP']) await t.test(command, async t => {
+    for (const command of ['stop', 'exit', 'quit', '^C', 'SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']) await t.test(command, async t => {
         const f = launch(t, 'pending-login');
         await f.waitFor('READY');
         f.child.stdin.write('unrelated console input\n');
@@ -131,6 +135,21 @@ test('console stop, fragmented CRLF and Unix signals exit cleanly even before st
         await f.waitFor('CLEANUP_START');
         f.child.kill('SIGTERM');
         assert.deepEqual(await f.finished, { code: 0, signal: null });
+        assert.equal(f.output.split('CLEANUP_START').length - 1, 1);
+        assert.match(f.output, /CLEANUP_DONE/);
+    });
+});
+
+test('bare ETX and fragmented ^C interrupt the console without a newline', { timeout: 6000 }, async t => {
+    for (const [name, send] of [
+        ['ETX', child => child.stdin.write('\u0003')],
+        ['fragmented ^C', async child => { child.stdin.write('^'); await new Promise(resolve => setTimeout(resolve, 20)); child.stdin.write('C'); }],
+    ]) await t.test(name, async t => {
+        const f = launch(t, 'pending-login');
+        await f.waitFor('READY');
+        await send(f.child);
+        await f.waitFor('CLEANUP_START', 1200);
+        assert.deepEqual(await f.finished, { code: 0, signal: null }, f.output);
         assert.equal(f.output.split('CLEANUP_START').length - 1, 1);
         assert.match(f.output, /CLEANUP_DONE/);
     });
@@ -173,4 +192,23 @@ test('real bot shutdown drains HTTP, SSE and initialization and closes both data
         if (mode === 'bot-initializing') assert(f.output.indexOf('DB_CLOSED') > f.output.indexOf('INITIALIZATION_RESOLVED'));
         assert.doesNotMatch(f.output, /Private ticket service ready|Must not continue initialization|Shutdown timed out/);
     });
+});
+
+
+test('shutdown diagnostics flush before exit, including timeout and failure', { timeout: 8000 }, async t => {
+    const fs = require('node:fs/promises');
+    const os = require('node:os');
+    for (const [mode, code, ending] of [['pending-login', 0, 'shutdown_complete'], ['hung', 1, 'shutdown_timeout'], ['failure', 1, 'shutdown_error']]) {
+        const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'shutdown-debug-'));
+        t.after(() => fs.rm(directory, { recursive: true, force: true }));
+        await fs.writeFile(path.join(directory, 'chat-debug.enabled'), '');
+        const f = launch(t, mode, 0, directory);
+        await f.waitFor('READY'); f.child.stdin.write('\u0003');
+        assert.deepEqual(await f.finished, { code, signal: null });
+        const text = await fs.readFile(path.join(directory, 'chat-debug.ndjson'), 'utf8');
+        const entries = text.trim().split('\n').map(JSON.parse);
+        assert(entries.some(entry => entry.event === 'shutdown_requested' && entry.trigger === 'console interrupt'));
+        assert(entries.some(entry => entry.event === ending));
+        assert(!text.includes('synthetic cleanup failure'));
+    }
 });

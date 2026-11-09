@@ -22,6 +22,7 @@ async function verifyTicketChat() {
     const firstMessage = region?.querySelector('[data-message-id]');
     assert(input && region && firstMessage, 'Wait for the conversation to load.');
     assert(!input.disabled, 'Open a ticket that accepts mock messages.');
+    input.scrollIntoView({ block: 'end' }); // Read acknowledgements require the transcript bottom to be on screen.
     const report = {};
     const setDraft = value => {
         Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, value);
@@ -54,11 +55,9 @@ async function verifyTicketChat() {
             const count = region.querySelectorAll('[data-message-id]').length;
             region.scrollTop = 0;
             region.dispatchEvent(new Event('scroll'));
-            await pause(100);
             const anchor = [...region.querySelectorAll('[data-message-id]')].find(el => el.getBoundingClientRect().bottom > region.getBoundingClientRect().top);
             const offset = () => anchor.getBoundingClientRect().top - region.getBoundingClientRect().top;
             const position = offset();
-            older.click();
             await until(() => region.querySelectorAll('[data-message-id]').length > count, 'Older history was not loaded.');
             await pause(600);
             assert(anchor.isConnected && Math.abs(offset() - position) < 2, 'Loading older messages lost the reading position.');
@@ -139,11 +138,11 @@ async function verifyTicketChat() {
         const offset = () => anchor.getBoundingClientRect().top - region.getBoundingClientRect().top;
         const before = offset();
         await incoming(`Unread while browsing history ${Date.now()}`);
-        await until(() => [...document.querySelectorAll('button')].some(b => b.textContent.includes('jump to present')), 'Incoming message should offer jump to present.');
+        await until(() => [...document.querySelectorAll('button')].some(b => b.textContent.toLowerCase().includes('jump to present')), 'Incoming message should offer jump to present.');
         assert(Math.abs(offset() - before) < 2, 'Incoming message moved the history anchor.');
         const ticket = await (await request(api)).json();
         assert(ticket.ticket.unread, 'Reading older history must not mark a new message read.');
-        [...document.querySelectorAll('button')].find(b => b.textContent.includes('jump to present')).click();
+        [...document.querySelectorAll('button')].find(b => b.textContent.toLowerCase().includes('jump to present')).click();
         await until(async () => !(await (await request(api)).json()).ticket.unread, 'Jumping to the latest message did not mark it read.');
         assert(region.scrollHeight - region.scrollTop - region.clientHeight < 2, 'Jump did not reach the latest message.');
         report.history = 'incoming preserves position and unread state; jump acknowledges latest';
@@ -154,5 +153,48 @@ async function verifyTicketChat() {
     } finally {
         if (frame) cancelAnimationFrame(frame);
         window.fetch = originalFetch;
+    }
+}
+
+// Run on the synthetic fixture after opening a ticket with an image attachment.
+async function verifyTicketMedia() {
+    const assert = (condition, message) => { if (!condition) throw new Error(message); };
+    const session = await (await fetch('/api/session')).json();
+    assert(session.capabilities.mockChat, 'Run media checks only against the local mock.');
+    const attachment = document.querySelector('discord-image-attachment');
+    const image = attachment?.querySelector('img');
+    const link = attachment?.querySelector('a');
+    assert(image && link, 'Open a fixture ticket with an image attachment.');
+    const original = image.src;
+    const originalLink = link.href;
+    const samples = [];
+    try {
+        for (const [width, height] of [[2400, 3600], [4000, 500], [32, 32]]) {
+            const canvas = document.createElement('canvas');
+            canvas.width = width; canvas.height = height;
+            const context = canvas.getContext('2d');
+            context.fillStyle = '#5865f2'; context.fillRect(0, 0, width, height);
+            image.src = canvas.toDataURL('image/png');
+            await image.decode();
+            const box = image.getBoundingClientRect();
+            assert(box.width <= 320 && box.height <= 288, 'Attachment preview exceeds Discord-sized bounds.');
+            assert(Math.abs(box.width / box.height - width / height) < 0.02, 'Image aspect ratio changed.');
+            assert(box.width <= width && box.height <= height, 'Small images must not be enlarged.');
+            assert(document.documentElement.scrollWidth <= innerWidth, 'Media overflows the page.');
+            samples.push({ natural: [width, height], preview: [box.width, box.height] });
+        }
+        assert(link.href === originalLink && link.target === '_blank' && link.rel.includes('noopener'), 'The full-size attachment link changed.');
+        link.focus({ preventScroll: true });
+        assert(document.activeElement === link && getComputedStyle(link).outlineStyle !== 'none', 'Attachment link must have visible keyboard focus.');
+        const message = [...document.querySelectorAll('discord-message')].find(item => !item.messageBodyOnly);
+        assert(parseFloat(getComputedStyle(message).paddingLeft) >= 14, 'Tailwind reset overrides Discord message spacing.');
+        const avatar = message.shadowRoot.querySelector('.discord-author-avatar img');
+        await avatar.decode();
+        assert(avatar.naturalWidth > 0 && avatar.getBoundingClientRect().width === 40, 'User avatar is missing or has the wrong size.');
+        const fonts = await document.fonts.load('16px "gg sans"');
+        assert(fonts.length > 0, 'The Discord font is not loaded.');
+        return { viewport: [innerWidth, innerHeight], theme: document.querySelector('.ticket-chat').dataset.theme, samples, avatarLoaded: true, fontLoaded: true, keyboardLink: true };
+    } finally {
+        image.src = original;
     }
 }

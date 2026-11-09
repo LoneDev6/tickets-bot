@@ -38,13 +38,15 @@ test('authenticated encryption hides identifiers and payloads; wrong keys and ta
     assert.throws(() => store.get(ticketId));
 });
 
-test('all states, stable close dates, reopening, retention and no resurrection after purge', () => {
+test('closed and locked tickets retain their encrypted messages indefinitely; deletion still expires and cannot resurrect', () => {
     let now = 100 * DAY;
     const store = new TicketStore(new Map(), key, { now: () => now });
     assert.equal(ticketStatus({ archived: true, locked: true }), 'locked');
     store.upsert(base); assert.equal(store.counts().open, 1);
+    store.saveMessage(ticketId, { id: messageId, authorId: userId, content: 'retained conversation' });
     now += DAY; store.upsert({ threadId: ticketId, archived: true });
     const closed = store.get(ticketId);
+    assert.equal(closed.expiresAt, null);
     now += DAY; store.upsert({ threadId: ticketId, name: 'renamed' });
     assert.equal(store.get(ticketId).statusChangedAt, closed.statusChangedAt);
     assert.equal(store.get(ticketId).expiresAt, closed.expiresAt);
@@ -54,9 +56,41 @@ test('all states, stable close dates, reopening, retention and no resurrection a
     store.upsert({ threadId: ticketId, archived: false });
     assert.equal(store.get(ticketId).expiresAt, null);
     store.upsert({ threadId: ticketId, locked: true }); assert.equal(store.counts().locked, 1);
-    now += 31 * DAY; assert.equal(store.expire(), 1); assert.equal(store.get(ticketId), null);
+    now += 3650 * DAY; assert.equal(store.expire(), 0);
+    assert.equal(store.message(ticketId, messageId).content, 'retained conversation');
+    store.clearMessages(ticketId); store.upsert({ threadId: ticketId, deletedAt: now, description: null });
+    const deleted = store.get(ticketId);
+    assert.equal(deleted.expiresAt, now + 30 * DAY);
+    assert.equal(store.messages(ticketId).length, 0);
+    now += DAY; store.upsert({ threadId: ticketId, name: 'deleted metadata update' });
+    assert.equal(store.get(ticketId).expiresAt, deleted.expiresAt);
+    now += 30 * DAY; assert.equal(store.expire(), 1); assert.equal(store.get(ticketId), null);
     assert.equal(store.upsert(base, { imported: true }), null);
     assert.equal(store.upsert(base), null);
+});
+
+test('scoped expiry checks one ticket without scanning the archive and still purges an expired ticket', () => {
+    let now = 100 * DAY;
+    const store = new TicketStore(new Map(), key, { now: () => now });
+    store.upsert(base);
+    const deletedId = '120000000000000006';
+    store.upsert({ ...base, threadId: deletedId, deletedAt: now });
+    store.deleteMessage(ticketId, messageId);
+    now += 31 * DAY;
+    const all = store.all.bind(store);
+    const keys = store.keys.bind(store);
+    store.all = () => assert.fail('A scoped check must not decrypt the whole archive');
+    store.keys = () => assert.fail('A retained ticket check must not enumerate archive keys');
+    assert.equal(store.expire(ticketId), 0);
+    assert.equal(store.expire('120000000000000999'), 0);
+    store.keys = keys;
+    assert.equal(store.expire(deletedId), 1);
+    assert.equal(store.get(deletedId), null);
+    assert.equal(store.upsert({ ...base, threadId: deletedId }), null);
+    assert.equal(store.messageDeleted(ticketId, messageId), true, 'Only global maintenance removes old tombstones');
+    store.all = all;
+    assert.equal(store.expire(), 0);
+    assert.equal(store.messageDeleted(ticketId, messageId), false);
 });
 
 test('opt-out, deletion and edit/delete backfill races preserve privacy', () => {
@@ -119,7 +153,8 @@ test('cached Discord identity and avatar take precedence over saved ticket data'
     const user = { globalName: 'Discord Name', username: 'username', displayAvatarURL: options => { assert.deepEqual(options, { extension: 'png', size: 64 }); return 'avatar-url'; } };
     assert.deepEqual(publicTicket(ticket, user), { ...ticket, openerName: 'Discord Name', openerAvatarUrl: 'avatar-url', discordUrl: `https://discord.com/channels/${base.guildId}/${ticketId}`, recordedParticipantsOnly: true, unread: false });
     assert.equal(publicTicket(ticket, { username: 'Fallback' }).openerName, 'Fallback');
-    assert.equal(publicTicket(ticket).openerAvatarUrl, null);
+    assert.equal(publicTicket(ticket).openerAvatarUrl, 'old-avatar');
+    assert.equal(publicTicket(base).openerAvatarUrl, null);
 });
 
 test('owner lookup uses exact IDs or mentions, and escalation sorting works across cursor pages', () => {
@@ -252,4 +287,25 @@ test('partial legacy import reports bounded safe errors and does not mark comple
     assert(!JSON.stringify(report.errorDetails).includes('private response token'));
     assert.equal(store.get(goodId).openerId, userId);
     assert.equal(store.read('meta:legacy-complete'), null);
+});
+
+test('startup clears legacy expiry on retained closed tickets before expiry checks, without restoring purged data', () => {
+    let now = 100 * DAY;
+    const database = new Map();
+    const old = new TicketStore(database, key, { now: () => now });
+    old.upsert({ ...base, archived: true });
+    old.saveMessage(ticketId, { id: messageId, authorId: userId, content: 'old encrypted conversation' });
+    old.write(`t:${old.index(ticketId)}`, { ...old.get(ticketId), expiresAt: now + 30 * DAY });
+    const purgedId = '120000000000000099';
+    old.upsert({ ...base, threadId: purgedId }); old.purge(purgedId);
+    now += 365 * DAY;
+    const restarted = new TicketStore(database, key, { now: () => now });
+    assert.equal(restarted.get(ticketId).expiresAt, null);
+    assert.equal(restarted.expire(), 0);
+    assert.equal(restarted.message(ticketId, messageId).content, 'old encrypted conversation');
+    assert.equal(restarted.get(purgedId), null);
+    assert.equal(restarted.upsert({ ...base, threadId: purgedId }, { imported: true }), null);
+    const revision = restarted.revision;
+    assert.equal(new TicketStore(database, key, { now: () => now }).revision, revision, 'migration is idempotent');
+    assert(!JSON.stringify([...database]).includes('old encrypted conversation'));
 });

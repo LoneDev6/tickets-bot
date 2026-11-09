@@ -10,13 +10,15 @@ test('ticket creation panel exposes a public policy link and accurate collection
     const link = panel.components[1].toJSON().components[0];
     assert.equal(link.url, 'https://tickets.example.com/privacy');
     assert.equal(link.label, 'Privacy policy');
-    assert(panel.embeds[0].data.description.includes('30 days'));
+    assert(panel.embeds[0].data.description.includes('/tickets-privacy'));
+    assert(panel.embeds[0].data.description.includes('without automatic expiry'));
     assert(panel.embeds[0].data.description.includes('disabled pending Discord authorization'));
     assert(creationPanel({ ...settings, messageContentApproved: true }).embeds[0].data.description.includes('archived on our server'));
+    assert(creationPanel({ ...settings, discordReaderApiKey: 'test-key' }).embeds[0].data.description.includes('archived on our server'));
 });
 
 test('existing creation panels are updated once through pagination, without changing other authors', async () => {
-    const database = new Map();
+    const database = new Map([['meta:creation-panel-version', `privacy-v4:${settings.publicBaseUrl}:false`]]);
     let pages = 0; let edits = 0;
     const botId = '120000000000000007';
     const components = [{ components: [{ customId: 'ticket_panel_create_thread_generic' }] }];
@@ -32,4 +34,17 @@ test('existing creation panels are updated once through pagination, without chan
     await refreshCreationPanels(client, settings, store);
     await refreshCreationPanels(client, settings, store);
     assert.equal(edits, 1); assert.equal(pages, 2);
+});
+
+test('public policy matches indefinite encrypted storage while preserving Discord deletion and session expiry', () => {
+    const { privacyPolicy } = require('../privacy');
+    const policy = privacyPolicy({ ...settings, discordReaderApiKey: 'test-key' });
+    const retention = policy.sections.find(section => section.title === 'Retention and deletion').paragraphs.join(' ');
+    assert.match(retention, /without automatic expiry/);
+    assert.match(retention, /Deleting a Discord thread removes its locally stored conversation/);
+    assert.match(retention, /residual state.*within 30 days/);
+    assert.match(retention, /sessions persist for up to 30 days/);
+    assert.doesNotMatch(retention, /30 days after it is closed/);
+    const collection = policy.sections.find(section => section.title === 'Data and purposes').paragraphs.join(' ');
+    assert.match(collection, /does not add the account to threads/);
 });

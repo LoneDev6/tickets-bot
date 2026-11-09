@@ -8,7 +8,7 @@ const { createApp, sameToken } = require('../server');
 const { loadSettings } = require('../settings');
 
 const ids = { ticket: '120000000000000001', user: '120000000000000002', guild: '120000000000000004', parent: '120000000000000005', role: '120000000000000008' };
-async function fixture(t, staticDir = '/nonexistent-test-fixture') {
+async function fixture(t, staticDir = '/nonexistent-test-fixture', debug) {
     const settings = { development: true, publicBaseUrl: 'http://127.0.0.1', guildId: ids.guild, ticketParentId: ids.parent, supportRoleId: ids.role, ownerId: '120000000000000009', sessionSecret: randomBytes(48).toString('hex'), clientId: 'test', clientSecret: 'test', messageContentApproved: false };
     let staff = true;
     const provider = async url => {
@@ -22,9 +22,9 @@ async function fixture(t, staticDir = '/nonexistent-test-fixture') {
         assert.equal(force, true);
         return { id: user, roles: { cache: new Map(staff ? [[ids.role, {}]] : []) } };
     } } };
-    const service = new TicketService({ guilds: { fetch: async () => guild } }, store, settings);
+    const service = new TicketService({ guilds: { fetch: async () => guild } }, store, settings, { debug });
     const logs = [];
-    const app = createApp({ service, settings, fetchImpl: provider, staticDir, logger: { warn: (...args) => logs.push(args) } });
+    const app = createApp({ service, settings, fetchImpl: provider, staticDir, logger: { warn: (...args) => logs.push(args) }, debug });
     const server = app.listen(0, '127.0.0.1');
     await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
     settings.publicBaseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -69,11 +69,42 @@ test('mock API registration is rejected outside development', () => {
     assert.throws(() => createApp({ settings: { development: false }, configureMockApi: () => {} }), /Mock APIs require development mode/);
 });
 
+test('detail and cached chat avoid global expiry scans while expired ticket access still fails closed', async t => {
+    const f = await fixture(t); await f.login();
+    Object.assign(f.settings, { messageContentApproved: true, webChatEnabled: true });
+    const all = f.store.all.bind(f.store);
+    f.store.all = () => assert.fail('Single-ticket requests must not scan the full archive');
+    assert.equal((await f.request(`/api/tickets/${ids.ticket}`)).status, 200);
+    assert.equal((await f.request(`/api/tickets/${ids.ticket}/messages?cached=1&limit=20`)).status, 200);
+    f.store.upsert({ threadId: ids.ticket, deletedAt: Date.now() - 31 * 86_400_000, statusChangedAt: Date.now() - 31 * 86_400_000 });
+    f.store.now = () => Date.now() + 31 * 86_400_000;
+    assert.equal((await f.request(`/api/tickets/${ids.ticket}`)).status, 404);
+    assert.equal(f.store.get(ids.ticket), null);
+    f.store.all = all;
+    assert.equal((await f.request('/api/tickets')).status, 200);
+});
+
+test('list and detail serve stored requester avatars without profile requests', async t => {
+    const f = await fixture(t); await f.login();
+    const avatar = 'https://cdn.discordapp.com/avatars/120000000000000002/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.webp?size=128';
+    f.store.upsert({ threadId: ids.ticket, openerAvatarUrl: avatar });
+    f.service.client.users = { cache: new Map(), fetch: () => assert.fail('Ticket rendering must not fetch user profiles') };
+    f.service.client.channels = { cache: new Map([[ids.parent, { name: 'support-tickets' }]]), fetch: () => assert.fail('Ticket rendering must not fetch parent channels') };
+    const list = await (await f.request('/api/tickets')).json();
+    const detail = await (await f.request(`/api/tickets/${ids.ticket}`)).json();
+    assert.equal(list.tickets[0].openerAvatarUrl, avatar);
+    assert.equal(detail.ticket.openerAvatarUrl, avatar);
+    assert.equal(list.tickets[0].parentName, 'support-tickets');
+    assert.equal(detail.ticket.parentName, 'support-tickets');
+});
+
 test('webhook reply API accepts only content and derives the staff actor from the protected session', async t => {
     const f = await fixture(t); await f.login();
     Object.assign(f.settings, { messageContentApproved: true, webChatEnabled: true, webRepliesEnabled: true });
     const session = await (await f.request('/api/session')).json();
     assert.equal(session.capabilities.canReply, true);
+    assert.equal(session.capabilities.replyClientNonce, true);
+    assert.equal(session.capabilities.mentionNames, true);
     const calls = [];
     f.service.reply = async (id, member, content) => { calls.push({ id, actor: member.id, content }); return '120000000000000099'; };
     const headers = { Origin: f.settings.publicBaseUrl, 'X-CSRF-Token': session.csrfToken, 'Content-Type': 'application/json' };
@@ -157,9 +188,10 @@ test('parallel protected requests share only the pending bot member lookup, neve
     await new Promise(resolve => setTimeout(resolve, 40));
     try { assert.equal(calls, 1); } finally { release(); }
     assert((await requests).every(response => response.status === 200));
+    const completedChecks = calls;
     f.revoke();
     assert.equal((await f.request('/api/tickets')).status, 403);
-    assert.equal(calls, 2);
+    assert.equal(calls, completedChecks + 1);
 });
 
 test('temporary bot membership failures deny access without losing the signed-in session', async t => {
@@ -283,6 +315,66 @@ test('configuration rejects unsafe origins and cryptographic comparison handles 
     assert.throws(() => loadSettings({ WEB_REPLIES_ENABLED: 'yes' }, config));
     assert.throws(() => loadSettings({ WEB_CHAT_ENABLED: 'yes' }, config));
     assert.throws(() => loadSettings({ STATS_API_TOKEN: 'short' }, config));
+    const reader = loadSettings({ DISCORD_READER_API_KEY: 'test-key' }, config);
+    assert.equal(reader.discordReaderBaseUrl, 'https://ds-scrape-api.devs.beer');
+    assert.equal(reader.discordReaderApiKey, 'test-key');
+    assert.equal(reader.messageContentApproved, false);
+    assert.equal('discordReaderUserId' in reader, false);
+    assert.deepEqual(loadSettings({ DISCORD_READER_API_KEY: 'test-key', DISCORD_READER_USER_ID: ids.user }, config), reader);
+    assert.equal(loadSettings({}, config).discordReaderApiKey, null);
+    for (const base of ['http://reader.example', 'https://user:secret@reader.example', 'https://reader.example/path', 'https://reader.example?key=secret', 'invalid']) {
+        assert.throws(() => loadSettings({ DISCORD_READER_BASE_URL: base }, config), /DISCORD_READER_BASE_URL/);
+    }
+    assert.throws(() => loadSettings({ DISCORD_READER_API_KEY: 'key\ninjected-header' }, config), /DISCORD_READER_API_KEY/);
+    assert.equal(loadSettings({ NODE_ENV: 'development', DISCORD_READER_BASE_URL: 'http://127.0.0.1:3000' }, config).discordReaderBaseUrl, 'http://127.0.0.1:3000');
+});
+
+test('reader errors preserve staff sign-in, Retry-After and private backend credentials', async t => {
+    const { DiscordReaderError } = require('../discord-reader');
+    const f = await fixture(t); await f.login();
+    f.settings.webChatEnabled = true;
+    f.service.reader = { close() {} };
+    let reads = 0;
+    f.service.conversation = async () => { reads++; throw new DiscordReaderError(503, 'unauthorized', null, 'The reader service rejected its credentials.', 401); };
+    const denied = await f.request(`/api/tickets/${ids.ticket}/messages`);
+    assert.equal(denied.status, 503);
+    assert.match((await denied.json()).error, /reader service/);
+    assert.equal((await f.request('/api/session')).status, 200);
+    f.service.conversation = async () => { throw new DiscordReaderError(429, 'queue_full', 60, 'The reader service is rate limited.', 429); };
+    const limited = await f.request(`/api/tickets/${ids.ticket}/messages`);
+    assert.equal(limited.status, 429); assert.equal(limited.headers.get('retry-after'), '60');
+    const malformed = await f.request(`/api/tickets/${ids.ticket}/messages?before[]=${ids.ticket}`);
+    assert.equal(malformed.status, 400); assert.equal(reads, 1);
+    for (const before of ['0000000000000000', '18446744073709551616', '123456789012345678901']) assert.equal((await f.request(`/api/tickets/${ids.ticket}/messages?before=${before}`)).status, 400);
+    for (const query of ['limit=0', 'limit=51', 'limit=1.5', 'limit=20&limit=20', 'cached=0', 'cached[]=1', 'unknown=1']) {
+        assert.equal((await f.request(`/api/tickets/${ids.ticket}/messages?${query}`)).status, 400);
+    }
+    f.service.conversation = async (_id, options) => {
+        assert.deepEqual(options, { before: undefined, limit: 20, cached: true });
+        return { messages: [], nextBefore: null, available: true, cached: true };
+    };
+    assert.equal((await f.request(`/api/tickets/${ids.ticket}/messages?limit=20&cached=1`)).status, 200);
+    f.revoke();
+    assert.equal((await f.request(`/api/tickets/${ids.ticket}/messages`)).status, 403);
+});
+
+test('long reader response rechecks staff role and ticket exclusion before returning data', async t => {
+    for (const action of ['role', 'exclude', 'logout']) {
+        const f = await fixture(t); await f.login();
+        const session = await (await f.request('/api/session')).json();
+        f.settings.webChatEnabled = true; f.service.reader = { close() {} };
+        let release;
+        f.service.conversation = () => new Promise(resolve => { release = resolve; });
+        const response = f.request(`/api/tickets/${ids.ticket}/messages`);
+        while (!release) await new Promise(resolve => setImmediate(resolve));
+        if (action === 'role') f.revoke();
+        if (action === 'exclude') f.store.excludeUser(ids.user);
+        if (action === 'logout') assert.equal((await f.request('/auth/logout', { method: 'POST', headers: { Origin: f.settings.publicBaseUrl, 'X-CSRF-Token': session.csrfToken } })).status, 204);
+        release({ messages: [{ content: 'must not leak' }], nextBefore: null });
+        const result = await response;
+        assert.equal(result.status, action === 'role' ? 403 : action === 'exclude' ? 409 : 401);
+        assert.equal(JSON.stringify(await result.json()).includes('must not leak'), false);
+    }
 });
 
 test('statistics use a separate header-only Bearer token and never expose ticket data', async t => {
@@ -352,4 +444,74 @@ test('staff web actions enforce CSRF, fresh roles, scope and the fixed action al
     f.revoke();
     assert.equal((await f.request(route, { method: 'POST', body, headers })).status, 403);
     assert.equal(calls.length, 1);
+});
+
+
+test('chat timings correlate requests and accept only staff CSRF-protected numeric browser reports', async t => {
+    const fs = require('node:fs/promises');
+    const os = require('node:os');
+    const { createChatDebug } = require('../utils/chat-debug');
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'chat-debug-http-'));
+    t.after(() => fs.rm(directory, { recursive: true, force: true }));
+    await fs.writeFile(path.join(directory, 'chat-debug.enabled'), '');
+    const debug = createChatDebug({ directory });
+    const f = await fixture(t, undefined, debug);
+    const report = { viewId: 'bfb515a1-9011-4a35-8939-121299751877', readyMs: 125, firstDataMs: 90, moduleMs: 30,
+        count: 1, cached: true, visible: true };
+    assert.equal((await f.request('/api/debug/chat', { method: 'POST' })).status, 401);
+    await f.login();
+    const session = await (await f.request('/api/session')).json();
+    assert.equal(session.capabilities.chatDebug, true);
+    f.settings.webChatEnabled = true; f.settings.messageContentApproved = true;
+    const response = await f.request(`/api/tickets/${ids.ticket}/messages?limit=20&cached=1`, { headers: { 'X-Chat-View': report.viewId } });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-chat-debug'), '1');
+    const requestId = response.headers.get('x-chat-request-id');
+    assert.match(requestId, /^[a-f0-9-]{36}$/);
+    const send = body => f.request('/api/debug/chat', { method: 'POST', headers: { Origin: f.settings.publicBaseUrl,
+        'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken }, body: JSON.stringify(body) });
+    assert.equal((await f.request('/api/debug/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(report) })).status, 403);
+    for (const body of [{ ...report, readyMs: -1 }, { ...report, readyMs: 'slow' }, { ...report, viewId: 'private-name' },
+        { ...report, moduleMs: null }, { ...report, count: 1.5 }, { ...report, content: 'secret-message' }]) assert.equal((await send(body)).status, 400);
+    assert.equal((await send(report)).status, 204);
+    await debug.flush();
+    const raw = await fs.readFile(path.join(directory, 'chat-debug.ndjson'), 'utf8');
+    const entries = raw.trim().split('\n').map(JSON.parse);
+    const stages = entries.filter(entry => entry.requestId === requestId);
+    assert(stages.some(entry => entry.event === 'http_start' && entry.op === 'messages' && entry.viewId === report.viewId));
+    assert(stages.some(entry => entry.event === 'staff_auth'));
+    assert(stages.some(entry => entry.event === 'staff_recheck'));
+    assert(stages.some(entry => entry.event === 'snapshot' && entry.cached === true));
+    assert(stages.some(entry => entry.event === 'http_end' && entry.status === 200));
+    assert(entries.some(entry => entry.event === 'browser_ready' && entry.viewId === report.viewId && entry.readyMs === 125));
+    assert(stages.some(entry => entry.ticketId === ids.ticket && entry.requestPath === `/api/tickets/${ids.ticket}/messages`));
+    for (const sensitive of [ids.user, 'Synthetic staff', 'secret-message', 'test-token', session.csrfToken, '<script>private</script>']) assert(!raw.includes(sensitive), sensitive);
+    await fs.unlink(path.join(directory, 'chat-debug.enabled'));
+    assert.equal((await send(report)).status, 404);
+    assert.equal((await (await f.request('/api/session')).json()).capabilities.chatDebug, undefined);
+    await debug.flush();
+});
+
+test('reply correlation accepts UUID only and keeps sender identity server-derived', async t => {
+    const f = await fixture(t); await f.login();
+    Object.assign(f.settings, { messageContentApproved: true, webChatEnabled: true, webRepliesEnabled: true });
+    const session = await (await f.request('/api/session')).json();
+    const nonce = '550e8400-e29b-41d4-a716-446655440000'; const calls = [];
+    f.service.reply = async (id, member, content, clientNonce) => { calls.push({ id, actor: member.id, content, clientNonce }); return '120000000000000099'; };
+    const send = body => f.request(`/api/tickets/${ids.ticket}/reply`, { method: 'POST', headers: { Origin: f.settings.publicBaseUrl, 'X-CSRF-Token': session.csrfToken, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    for (const clientNonce of ['secret', null, 123, '550e8400-e29b-11d4-a716-446655440000']) assert.equal((await send({ content: 'Reply', clientNonce })).status, 400);
+    assert.equal((await send({ content: 'Reply', clientNonce: nonce })).status, 201);
+    assert.deepEqual(calls, [{ id: ids.ticket, actor: session.user.id, content: 'Reply', clientNonce: nonce }]);
+});
+
+test('deferred mention names require retained ticket/staff and are rechecked after lookup', async t => {
+    const f = await fixture(t); const path = `/api/tickets/${ids.ticket}/mentions?users=${ids.user}`;
+    assert.equal((await f.request(path)).status, 401); await f.login();
+    Object.assign(f.settings, { messageContentApproved: true, webChatEnabled: true });
+    let calls = 0;
+    f.service.resolveMentions = async () => { calls++; return { users: { [ids.user]: 'Staff' }, roles: {} }; };
+    for (const query of ['users=bad', `users=${Array(5).fill(ids.user).join(',')}`, `users=${ids.user}&users=${ids.user}`, `token=secret`]) assert.equal((await f.request(`/api/tickets/${ids.ticket}/mentions?${query}`)).status, 400);
+    assert.equal((await f.request(path)).status, 200); assert.equal(calls, 1);
+    f.service.resolveMentions = async () => { f.revoke(); return { users: { [ids.user]: 'Must not leak' }, roles: {} }; };
+    assert.equal((await f.request(path)).status, 403);
 });

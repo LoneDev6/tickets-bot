@@ -8,7 +8,7 @@ Il [piano](PLAN.md) è stato implementato e verificato localmente: cifratura, ar
 
 - Accesso: proprietario e staff autorizzato.
 - Archivio conversazioni sul server: sì.
-- Durata: mentre il ticket è aperto e fino a 30 giorni dalla chiusura; quindi potenzialmente oltre 30 giorni per singolo messaggio.
+- Durata: le pagine già lette restano nell'archivio cifrato su disco senza scadenza automatica, anche dopo chiusura, blocco o archiviazione. I record preesistenti con scadenza a 30 giorni sono migrati all'avvio prima dei controlli di scadenza. La cancellazione del thread Discord elimina subito conversazione e descrizione; i metadati residui del ticket eliminato scadono dopo 30 giorni. Opt-out, erasure e purge restano invariati.
 - Richieste privacy/cancellazione: `info@devs.beer`.
 - Informativa **separata** dal sito personale, pubblicata dal bot su `https://<dominio-bot>/privacy`, senza login. [Bozza dell'informativa](PRIVACY.md).
 - HTTPS previsto tramite [Cloudflare Tunnel su Pterodactyl](DEPLOYMENT.md), subordinato alle verifiche indicate. Nessuna nuova porta pubblica.
@@ -41,9 +41,9 @@ I paragrafi distinguono la funzione del bot, l'implementazione locale e lo scopo
 
 Testo da utilizzare dopo avere reso reali tutti i punti elencati:
 
-> The bot's dedicated privacy policy is publicly available at its /privacy page without requiring a login. It is linked from the Discord ticket creation panel before users submit a ticket, the bot's /privacy command, and the web dashboard. Users can contact info@devs.beer for privacy and deletion requests.
+> The bot's dedicated privacy policy is publicly available at its /privacy page without requiring a login. It is linked from the Discord ticket creation panel before users submit a ticket, the bot's /tickets-privacy command (also available as /privacy), and the web dashboard. Users can contact info@devs.beer for privacy and deletion requests.
 
-I link nel pannello di creazione, comando `/privacy` e app sono implementati. Verificare che puntino al dominio definitivo dopo il rilascio. Non dichiarare una bio o un messaggio automatico non implementati.
+I link nel pannello di creazione, comando `/tickets-privacy` (alias `/privacy`) e app sono implementati. Verificare che puntino al dominio definitivo dopo il rilascio. Non dichiarare una bio o un messaggio automatico non implementati.
 
 ### 4. Please share a link to your Privacy Policy
 
@@ -61,7 +61,7 @@ Sostituire con l'URL HTTPS stabile scelto nel deployment. Non usare un placehold
 
 Nel PDF è selezionato **No**. Non trasformare la domanda in un obbligo universale di rispondere Yes; deve descrivere il funzionamento reale.
 
-**Risposta prevista: Yes**, dopo il collaudo operativo di `/privacy` e dell'esclusione già implementati e testati localmente. Se il campo rimane No, adeguare informativa e architettura e non promettere l'opt-out.
+**Risposta prevista: Yes**, dopo il collaudo operativo di `/tickets-privacy` e dell'esclusione già implementati e testati localmente. Se il campo rimane No, adeguare informativa e architettura e non promettere l'opt-out.
 
 Comportamento implementato: utente identificato tramite Discord disattiva la copia dei contenuti dei propri ticket; lo staff continua da Discord. Il servizio applica l'esclusione prima di archiviare/mostrare contenuti e cancella le copie già raccolte secondo la richiesta. Per un partecipante escluso interrompe la copia della conversazione interessata anziché mantenere una trascrizione ingannevolmente completa. La ricezione tecnica di un evento per riconoscerne ID e scope non equivale a garantire che nessun payload sia mai arrivato al bot.
 
@@ -75,19 +75,19 @@ Il repository implementa archivio cifrato, recupero cronologia e sincronizzazion
 
 ### 8. Are you storing user message content data for 30 days or less?
 
-**No**, coerente con la scelta dell'utente. Un messaggio conservato per 20 giorni di ticket aperto più 30 giorni dopo la chiusura può rimanere per 50 giorni.
+**No.** Le pagine di conversazione già lette sono conservate nell'archivio cifrato senza scadenza automatica, anche dopo chiusura, blocco o archiviazione. Non viene avviato un nuovo import completo automatico. I record legacy con expiry di 30 giorni vengono migrati all'avvio prima dei controlli di scadenza; opt-out, richieste di erasure e purge restano effettivi. La cancellazione del thread elimina subito conversazione e descrizione; gli eventuali metadati residui del ticket deleted scadono dopo 30 giorni. Gli URL degli allegati possono scadere e non sono file archiviati permanentemente.
 
 Se viene richiesto un dettaglio:
 
-> Ticket conversation content is retained while the ticket is open and for up to 30 days after it is closed. Content may therefore be retained for more than 30 days from the original message date. Earlier deletion requests and applicable deletion requirements take precedence. The same retention limits apply to derived copies and backups.
+> Conversation pages already read are retained in an encrypted on-disk archive without automatic expiry, including after a ticket is closed, locked or archived. We do not start a new automatic full-history import. Pre-existing records with a 30-day expiry are migrated at startup before they expire. Opt-out, erasure requests and purge remain effective. Deleting the Discord thread immediately removes its conversation and description; residual metadata for the deleted ticket expires after 30 days. Attachment URLs are not permanent stored files and may expire.
 
-La scadenza deve essere eseguita da un job verificato e anche all'avvio; riapertura, cancellazione e restore non devono far rinascere dati già eliminati. Controllare che un ticket inattivo non rimanga indefinitamente aperto senza necessità.
+La migrazione dei record legacy va verificata all'avvio; restore e reimport non devono far rinascere dati cancellati, esclusi o purgati. Le sessioni restano a 30 giorni e le statistiche aggregate a 730 giorni.
 
 ### 9. How do users contact you to request deletion of their activity data?
 
 Testo inglese:
 
-> Users can email info@devs.beer to request deletion of data held by LoneDev's Tickets. They should include their Discord user ID and, if known, the ticket ID. We verify that the requester is entitled to make the request before removing the relevant stored data. The contact address and instructions will be available in the bot's dedicated privacy policy and /privacy command.
+> Users can email info@devs.beer to request deletion of data held by LoneDev's Tickets. They should include their Discord user ID and, if known, the ticket ID. We verify that the requester is entitled to make the request before removing the relevant stored data. The contact address and instructions will be available in the bot's dedicated privacy policy and /tickets-privacy command.
 
 Cambiare “will be available” in “are available” solo dopo il rilascio. Comando e pagina sono pronti localmente. Non chiedere password, token Discord o documenti d'identità come normale prova di titolarità. L'email deve essere monitorata e il processo di cancellazione deve funzionare anche per chi non ha accesso al pannello staff; l'operatività della casella non è stata verificata.
 
@@ -111,13 +111,13 @@ Nel codice esaminato non esiste un'integrazione AI; questo non verifica le prati
 >
 > Message metadata alone does not contain the support conversation. Slash commands and ticket-creation modals are suitable for opening and managing a ticket, but they do not provide the ordinary messages exchanged afterwards. Exceptions for the bot's own messages, DMs or mentions do not cover those thread conversations. REST history retrieval also remains subject to Message Content restrictions.
 >
-> We will filter processing to our configured ticket guild and private ticket parent, restrict dashboard access to the owner and authorized support staff, support exclusion and deletion requests, and retain ticket content only while the ticket is open and for up to 30 days after closure. Content will not be used for AI training or processed from unrelated channels.
+> We will filter processing to our configured ticket guild and private ticket parent, restrict dashboard access to the owner and authorized support staff, and support opt-out, erasure and purge requests. Conversation pages already read are kept in an encrypted on-disk archive without automatic expiry, including after ticket closure; we do not start a new automatic full-history import. Deleting a Discord thread immediately removes its conversation and description, while residual deleted-ticket metadata expires after 30 days. Content will not be used for AI training or processed from unrelated channels.
 
 Questo testo descrive la funzione richiesta, non afferma che l'intent serva a inviare messaggi. Invio e gestione dipendono dai relativi permessi Discord. Non utilizzare un token utente o altri mezzi per aggirare la mancata autorizzazione.
 
 ### 13. Links to screenshots and/or videos demonstrating your use case
 
-**URL pubblici mancanti: non inventarli.** Le [schermate locali sintetiche](screenshots/README.md) documentano il pannello e i suoi limiti; non dimostrano un flusso Discord reale. Preparare una demo con dati sintetici:
+**URL pubblici mancanti: non inventarli.** Le [schermate locali sintetiche](screenshots/README.md) includono ora un rendering illustrativo in stile Discord e una cattura del pannello dalla fixture locale. Tutte sono marcate come demo: non dimostrano un flusso Discord reale né il rilascio del nuovo comando. Preparare una demo con dati sintetici:
 
 1. Pannello di creazione Discord con informativa; apertura di un ticket privato.
 2. Conversazione con un account di test distinto dal bot, con messaggi normali senza mention.
@@ -141,10 +141,10 @@ Spuntare e inviare solo quando le informazioni sono accurate e i requisiti opera
 | Policy del bot pubblica e raggiungibile | `/privacy` locale anonimo verificato | Dominio HTTPS reale + link nel ticket panel |
 | Accesso solo staff | OAuth, non-staff/CSRF/revoca ruolo e SSE testati localmente | Collaudo OAuth/ruoli/stream su Discord reale |
 | Archivio esterno | Cifrato e testato su SQLite dopo riavvio; raccolta reale disabilitata | Conversazione di test dopo autorizzazione, edit/delete e cronologia |
-| Retention aperto + 30 giorni | Purge, clock/transizioni/riapertura e soppressione reimport testati | Backup e restore operativi senza resurrezione |
+| Archivio conversazioni senza expiry automatica; metadati deleted 30 giorni | Migrazione record legacy all'avvio da verificare; opt-out, purge e soppressione reimport testati | Backup e restore operativi senza resurrezione |
 | Cifratura a riposo | Nuovi record e indici cifrati/protetti, retirement testato | Separazione chiavi, backup e bonifica copie legacy/log |
 | Contatto cancellazione | Email scelta, operatività non provata | Email accessibile, procedura e test richiesta autorizzata |
-| Opt-out | Implementato e testato: purge e import rispettano l'esclusione | Percorso `/privacy` con account di test reale |
+| Opt-out | Implementato e testato: purge e import rispettano l'esclusione | Percorso `/tickets-privacy` con account di test reale |
 | Niente AI | Nessuna integrazione nel repo | Vincolo operativo su staff, fornitori e strumenti di supporto |
 | Demo del caso d'uso | Sette screenshot sintetici locali del pannello | Link pubblici e demo Discord con funzioni/limiti dichiarati |
 

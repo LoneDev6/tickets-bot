@@ -4,6 +4,12 @@ function loadSettings(env, config) {
     const port = Number(env.WEB_PORT || 7777);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid WEB_PORT.');
     const development = env.NODE_ENV === 'development';
+    let readerBase;
+    try { readerBase = new URL(env.DISCORD_READER_BASE_URL || 'https://ds-scrape-api.devs.beer'); }
+    catch { throw new Error('Invalid DISCORD_READER_BASE_URL.'); }
+    if (readerBase.pathname !== '/' || readerBase.search || readerBase.hash || readerBase.username || readerBase.password
+        || (readerBase.protocol !== 'https:' && !(development && readerBase.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(readerBase.hostname)))) throw new Error('DISCORD_READER_BASE_URL must be an HTTPS origin.');
+    if (env.DISCORD_READER_API_KEY && !/^[\x21-\x7e]{1,4096}$/.test(env.DISCORD_READER_API_KEY)) throw new Error('Invalid DISCORD_READER_API_KEY.');
     const base = env.PUBLIC_BASE_URL ? new URL(env.PUBLIC_BASE_URL) : null;
     if (base && (base.pathname !== '/' || base.search || base.hash || base.username || base.password
         || (base.protocol !== 'https:' && !(development && base.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(base.hostname))))) {
@@ -30,6 +36,7 @@ function loadSettings(env, config) {
         supportRoleId, summaryChannelId: env.SUMMARY_CHANNEL_ID || config.channels.ticketsNotifications,
         verificationChannelId: env.VERIFICATION_CHANNEL_ID || '989167088742572072',
         discordToken: env.DISCORD_TOKEN, clientId: env.CLIENT_ID, clientSecret: env.DISCORD_CLIENT_SECRET,
+        discordReaderBaseUrl: readerBase.origin, discordReaderApiKey: env.DISCORD_READER_API_KEY || null,
         sessionSecret: env.SESSION_SECRET, encryptionKey: env.TICKET_ENCRYPTION_KEY,
         messageContentApproved: env.MESSAGE_CONTENT_APPROVED === 'true',
         webChatEnabled: env.WEB_CHAT_ENABLED === 'true', webRepliesEnabled: env.WEB_REPLIES_ENABLED === 'true', statsApiToken: env.STATS_API_TOKEN || null,

@@ -29,6 +29,10 @@ class TicketStore extends EventEmitter {
         }
         this.revision = this.read('meta:revision') || 0;
         this.statistics = new Statistics(this);
+        // Remove the former closure deadline before any startup/API expiry checks.
+        for (const ticket of this.all()) {
+            if (ticket.status !== 'deleted' && ticket.expiresAt != null) this.upsert({ threadId: ticket.threadId, expiresAt: null });
+        }
     }
 
     keys() {
@@ -40,6 +44,7 @@ class TicketStore extends EventEmitter {
     }
 
     write(key, value) {
+        this.batchKeys?.add(key);
         const iv = randomBytes(12);
         const cipher = createCipheriv('aes-256-gcm', this.encryptionKey, iv);
         cipher.setAAD(Buffer.from(key));
@@ -60,7 +65,24 @@ class TicketStore extends EventEmitter {
     changed() {
         this.revision += 1;
         this.write('meta:revision', this.revision);
-        this.emit('change', { revision: this.revision });
+        if (!this.batchKeys) this.emit('change', { revision: this.revision });
+    }
+
+    batchWrites(work) {
+        if (!this.database.db?.transaction) return work();
+        const keys = new Set();
+        const revision = this.revision;
+        this.batchKeys = keys;
+        let result;
+        try { result = this.database.db.transaction(work)(); }
+        catch (error) {
+            this.database.evict([...keys]);
+            this.database.fetch([...keys]);
+            this.revision = revision;
+            throw error;
+        } finally { this.batchKeys = null; }
+        if (this.revision !== revision) this.emit('change', { revision: this.revision });
+        return result;
     }
 
     get(threadId) {
@@ -103,7 +125,7 @@ class TicketStore extends EventEmitter {
         if (imported && previous) return previous;
         const time = this.now();
         const record = {
-            schemaVersion: 1, guildId: null, parentId: null, name: null, openerId: null, openerName: null,
+            schemaVersion: 1, guildId: null, parentId: null, name: null, openerId: null, openerName: null, openerAvatarUrl: null,
             type: null, description: null, createdAt: null, archived: false, locked: false, deletedAt: null,
             statusChangedAt: time, lastMessageId: null, lastMessageAuthorId: null, lastMessageAuthorName: null,
             lastMessageAt: null, lastHumanMessageId: null, lastHumanMessageAuthorId: null,
@@ -114,12 +136,9 @@ class TicketStore extends EventEmitter {
         record.status = ticketStatus(record);
         const transitioned = previous && previous.status !== record.status;
         if (transitioned) record.statusChangedAt = time;
-        if (!previous || (previous.status === 'open' && record.status !== 'open') || record.status === 'open') {
-            const closedAt = Number(record.statusChangedAt) || time;
-            record.expiresAt = record.status === 'open' ? null : closedAt + 30 * DAY;
-        } else {
-            record.expiresAt = previous.expiresAt;
-        }
+        record.expiresAt = record.status === 'deleted'
+            ? previous?.expiresAt ?? (Number(record.statusChangedAt) || time) + 30 * DAY
+            : null;
         record.contentExcluded = Boolean(record.contentExcluded || this.excluded(record.openerId));
         if (record.contentExcluded) record.description = null;
         const comparable = value => JSON.stringify({ ...value, updatedAt: undefined });
@@ -176,6 +195,10 @@ class TicketStore extends EventEmitter {
         return this.read(`${this.messagePrefix(threadId)}${this.index(messageId)}`);
     }
 
+    messageDeleted(threadId, messageId) {
+        return Boolean(this.read(`d:${this.index(`${threadId}:${messageId}`)}`));
+    }
+
     saveMessage(threadId, message) {
         const ticket = this.get(threadId);
         if (!ticket || ticket.status === 'deleted' || ticket.contentExcluded || this.excluded(message.authorId)) return false;
@@ -184,7 +207,8 @@ class TicketStore extends EventEmitter {
         const previous = this.read(key);
         // A REST backfill must never replace a newer edit observed on the Gateway.
         if (previous && (previous.editedAt || 0) > (message.editedAt || 0)) return false;
-        if (this.read(`d:${this.index(`${threadId}:${message.id}`)}`)) return false;
+        if (this.messageDeleted(threadId, message.id)) return false;
+        if (previous && JSON.stringify(previous) === JSON.stringify(message)) return false;
         this.write(key, message);
         this.changed();
         return true;
@@ -199,6 +223,7 @@ class TicketStore extends EventEmitter {
     clearMessages(threadId) {
         const prefix = this.messagePrefix(threadId);
         for (const key of this.keys()) if (key.startsWith(prefix)) this.database.delete(key);
+        this.database.delete(`r:${this.index(threadId)}`);
     }
 
     purge(threadId) {
@@ -248,14 +273,16 @@ class TicketStore extends EventEmitter {
         return affected;
     }
 
-    expire() {
+    expire(threadId) {
         let count = 0;
-        for (const ticket of this.all()) {
+        const tickets = threadId === undefined ? this.all() : [this.get(threadId)].filter(Boolean);
+        for (const ticket of tickets) {
             if (ticket.expiresAt && ticket.expiresAt <= this.now()) {
                 this.purge(ticket.threadId);
                 count += 1;
             }
         }
+        if (threadId !== undefined) return count;
         for (const key of this.keys()) {
             if (key.startsWith('d:') && this.read(key).expiresAt <= this.now()) this.database.delete(key);
         }
@@ -276,7 +303,7 @@ function publicTicket(ticket, user) {
             || (Number(ticket.lastMessageAt) === Number(ticket.teamReadAt) && ticket.lastMessageId != null
                 && (ticket.teamReadMessageId == null || BigInt(ticket.lastMessageId) > BigInt(ticket.teamReadMessageId)))),
         openerName: user?.globalName || user?.username || ticketOpenerName(ticket),
-        openerAvatarUrl: user?.displayAvatarURL?.({ extension: 'png', size: 64 }) || null,
+        openerAvatarUrl: user?.displayAvatarURL?.({ extension: 'png', size: 64 }) || ticket.openerAvatarUrl || null,
         discordUrl: ticket.status === 'deleted' ? null : `https://discord.com/channels/${ticket.guildId}/${ticket.threadId}`,
         recordedParticipantsOnly: true,
     };
