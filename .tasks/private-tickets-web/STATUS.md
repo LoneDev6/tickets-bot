@@ -3,7 +3,9 @@
 - User authorized committing all pre-existing local work along with this UI alignment.
 - Tickets and forum share retained list/detail panes, browser-persisted width, default-closed top details/management, and bottom-pinned composer on desktop/mobile. Ticket authorization, archive, paging, capabilities and moderation are preserved.
 - Tickets: 165 backend tests pass; build and ESLint pass. Synthetic browser checks cover navigation/filters, resize persistence, disclosure, dialogs, composer, mobile and theme. No real private ticket or production restart exercised.
-- Deployment pending: use the ticket-specific nab1 credential lookup recorded by `/mnt/scratch/tmp/codex/task.l5kraB/sftp.py`. Preserve remote `.env`, `.runtime`, databases and dependencies.
+- Published tickets source commit `97205c7` via its ticket-specific nab1 credential: 6 files updated, all 19 runtime files independently reread and SHA256 verified. Original changed files, manifest and verification receipt are at `/.runtime/deploy-workspace-20261109T145449Z`. Manifest SHA256: `8eddde9b3b061621d2e5003bc2f7aedbd3a2ab7fa1c7742a9c2f57485730ad51`.
+- Matching forum commit `929fa3c` published and all 4 files reread/verified. Its separate account retains backup `/.runtime/deploy-workspace-20261109T145522Z`, manifest SHA256 `0bdb2e7aea51c1dd822564b4c0a6d84fdfa6b88d967af84c45053a6e1da7949a`.
+- Production activation still requires Pterodactyl Restart for the tickets backend and browser reload for both UIs. No production restart or real private ticket read was performed. Remote credentials, databases, dependencies and existing runtime state were preserved. Task fixtures/browser processes are closed; temporary task diagnostics are removed after recording these receipts. Preserve the remote backups until healthy activation is confirmed.
 
 # Implementation checkpoint
 
